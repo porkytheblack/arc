@@ -2,8 +2,8 @@ import { initOasis } from 'oasis-sdk';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 
-const OASIS_API_KEY = import.meta.env.VITE_OASIS_API_KEY ?? '';
-const OASIS_SERVER_URL = import.meta.env.VITE_OASIS_SERVER_URL ?? '';
+const OASIS_API_KEY = import.meta.env.VITE_OASIS_API_KEY ?? import.meta.env.NEXT_PUBLIC_OASIS_API_KEY ?? '';
+const OASIS_SERVER_URL = import.meta.env.VITE_OASIS_SERVER_URL ?? import.meta.env.NEXT_PUBLIC_OASIS_SERVER_URL ?? '';
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.1.0';
 
 export const oasis = initOasis({
