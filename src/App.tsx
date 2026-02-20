@@ -13,6 +13,7 @@ import { Settings } from "./views/Settings";
 import { ProjectSelect } from "./views/ProjectSelect";
 import { SchemaViewer } from "./views/SchemaViewer";
 import { Button } from "./components/Button";
+import { UpdateNotification } from "./components/UpdateNotification";
 import type { Project } from "./lib/commands";
 import "./styles.css";
 
@@ -157,6 +158,7 @@ export default function App() {
         </div>
       </div>
     </div>
+    <UpdateNotification />
     </ThemeProvider>
   );
 }
