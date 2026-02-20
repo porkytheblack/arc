@@ -1,5 +1,5 @@
 {
-  "$schema": "./gen/schemas/desktop-schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Arc",
   "version": "0.1.0",
   "identifier": "net.dterminal.arc",
@@ -30,9 +30,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "YOUR_PUBLIC_KEY_HERE",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENEQjg0MTNBMkYzRUZBRUIKUldUcitqNHZPa0c0elRtSGhnZVMxNnAwaXQvM0NoMWplU2o5eFFUdXVsUXp3UEU2QmF0Y3JEb20K",
       "endpoints": [
-        "https://YOUR_OASIS_SERVER/arc/update/{{target}}-{{arch}}/{{current_version}}"
+        "https://oasis.dterminal.net/arc/update/{{target}}-{{arch}}/{{current_version}}"
       ],
       "windows": {
         "installMode": "passive"
