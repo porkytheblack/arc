@@ -3,23 +3,7 @@
 import { useEffect, useState } from "react";
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-
-/* ------------------------------------------------------------------ */
-/* Types matching the Oasis API                                        */
-/* ------------------------------------------------------------------ */
-
-interface Installer {
-  downloadUrl: string;
-  platform: string;
-  fileSize: number;
-  displayName: string;
-}
-
-interface ReleaseData {
-  version: string;
-  pubDate: string;
-  installers: Installer[];
-}
+import { fetchLatestRelease, type ReleaseData } from "../actions/releases";
 
 /* ------------------------------------------------------------------ */
 /* Platform icon SVGs                                                  */
@@ -88,30 +72,13 @@ export function DownloadSection() {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    async function fetchRelease() {
-      try {
-        const res = await fetch(
-          "https://oasis.dterminal.net/arc/releases/latest"
-        );
-        if (!res.ok) throw new Error("Failed to fetch");
-        const json = await res.json();
-        const data = json?.release?.data || json?.data;
-        if (data && data.installers && data.installers.length > 0) {
-          setRelease({
-            version: data.version,
-            pubDate: data.pubDate || data.pub_date,
-            installers: data.installers,
-          });
-        } else {
-          setError(true);
-        }
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchRelease();
+    fetchLatestRelease()
+      .then((data) => {
+        if (data) setRelease(data);
+        else setError(true);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
