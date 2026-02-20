@@ -10,8 +10,10 @@ import {
   FolderOpen,
   Table2,
   StickyNote,
+  MessageCircleHeart,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { FeedbackDialog } from "./FeedbackDialog";
 
 interface NavItem {
   id: string;
@@ -90,7 +92,10 @@ function NavButton({ icon: Icon, label, active, onClick }: NavButtonProps) {
 }
 
 export function Sidebar({ activeView, onNavigate, onSwitchProject }: SidebarProps) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
   return (
+    <>
     <div
       style={{
         width: 56,
@@ -144,6 +149,12 @@ export function Sidebar({ activeView, onNavigate, onSwitchProject }: SidebarProp
 
       {/* Bottom nav */}
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <NavButton
+          icon={MessageCircleHeart}
+          label="Send Feedback"
+          active={false}
+          onClick={() => setFeedbackOpen(true)}
+        />
         {BOTTOM_ITEMS.map((item) => (
           <NavButton
             key={item.id}
@@ -155,5 +166,8 @@ export function Sidebar({ activeView, onNavigate, onSwitchProject }: SidebarProp
         ))}
       </div>
     </div>
+
+    {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
+    </>
   );
 }
