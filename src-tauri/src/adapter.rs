@@ -470,58 +470,520 @@ impl DatabaseAdapter for PostgresAdapter {
 }
 
 /// Convert a postgres row value to serde_json::Value based on column type.
+fn pg_bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+#[derive(Debug)]
+struct PgRawValue(Option<Vec<u8>>);
+
+impl<'a> tokio_postgres::types::FromSql<'a> for PgRawValue {
+    fn from_sql(
+        _ty: &tokio_postgres::types::Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(Some(raw.to_vec())))
+    }
+
+    fn from_sql_null(
+        _ty: &tokio_postgres::types::Type,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(None))
+    }
+
+    fn accepts(_ty: &tokio_postgres::types::Type) -> bool {
+        true
+    }
+}
+
+fn pg_numeric_from_raw(raw: &[u8]) -> Option<String> {
+    if raw.len() < 8 || (raw.len() - 8) % 2 != 0 {
+        return None;
+    }
+
+    let read_i16 = |offset: usize| -> Option<i16> {
+        let bytes = raw.get(offset..offset + 2)?;
+        Some(i16::from_be_bytes([bytes[0], bytes[1]]))
+    };
+
+    let ndigits = read_i16(0)? as i32;
+    let weight = read_i16(2)? as i32;
+    let sign = read_i16(4)? as u16;
+    let dscale = read_i16(6)? as i32;
+
+    if ndigits < 0 || dscale < 0 {
+        return None;
+    }
+
+    let expected = 8 + (ndigits as usize) * 2;
+    if raw.len() != expected {
+        return None;
+    }
+
+    let mut digits = Vec::with_capacity(ndigits as usize);
+    for i in 0..ndigits as usize {
+        let off = 8 + i * 2;
+        let d = u16::from_be_bytes([raw[off], raw[off + 1]]);
+        if d >= 10000 {
+            return None;
+        }
+        digits.push(d);
+    }
+
+    match sign {
+        0xC000 => return Some("NaN".to_string()),
+        0xD000 => return Some("Infinity".to_string()),
+        0xF000 => return Some("-Infinity".to_string()),
+        0x0000 | 0x4000 => {}
+        _ => return None,
+    }
+
+    let mut int_groups: Vec<u16> = Vec::new();
+    if weight >= 0 {
+        for exp in (0..=weight).rev() {
+            let idx = weight - exp;
+            let digit = if idx >= 0 && (idx as usize) < digits.len() {
+                digits[idx as usize]
+            } else {
+                0
+            };
+            int_groups.push(digit);
+        }
+    }
+
+    let int_part = if int_groups.is_empty() {
+        "0".to_string()
+    } else if let Some(first_non_zero) = int_groups.iter().position(|d| *d != 0) {
+        let mut out = int_groups[first_non_zero].to_string();
+        for d in int_groups.iter().skip(first_non_zero + 1) {
+            out.push_str(&format!("{d:04}"));
+        }
+        out
+    } else {
+        "0".to_string()
+    };
+
+    let dscale = dscale as usize;
+    let frac_groups_needed = dscale.div_ceil(4);
+    let mut frac = String::new();
+    for g in 1..=frac_groups_needed {
+        let exp = -(g as i32);
+        let idx = weight - exp;
+        let digit = if idx >= 0 && (idx as usize) < digits.len() {
+            digits[idx as usize]
+        } else {
+            0
+        };
+        frac.push_str(&format!("{digit:04}"));
+    }
+    frac.truncate(dscale);
+    while frac.len() < dscale {
+        frac.push('0');
+    }
+
+    let mut out = if dscale > 0 {
+        format!("{int_part}.{frac}")
+    } else {
+        int_part
+    };
+
+    let is_zero = out
+        .chars()
+        .all(|c| c == '0' || c == '.');
+
+    if sign == 0x4000 && !is_zero {
+        out.insert(0, '-');
+    }
+
+    Some(out)
+}
+
+fn pg_decode_raw_by_type(
+    raw: Option<&[u8]>,
+    col_type: &tokio_postgres::types::Type,
+    depth: usize,
+) -> serde_json::Value {
+    use tokio_postgres::types::{FromSql, Kind, Type};
+
+    let Some(raw) = raw else {
+        return serde_json::Value::Null;
+    };
+
+    if depth > 16 {
+        return serde_json::Value::String(format!("<unsupported postgres type: {}>", col_type.name()));
+    }
+
+    match *col_type {
+        Type::BOOL => bool::from_sql(col_type, raw)
+            .ok()
+            .map(serde_json::Value::Bool)
+            .unwrap_or(serde_json::Value::Null),
+        Type::CHAR => i8::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::Number((v as i64).into()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::INT2 => i16::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::Number(v.into()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::INT4 => i32::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::Number(v.into()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::INT8 => i64::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::Number(v.into()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::OID => u32::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::Number((v as u64).into()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::FLOAT4 => f32::from_sql(col_type, raw)
+            .ok()
+            .and_then(|v| serde_json::Number::from_f64(v as f64))
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Type::FLOAT8 => f64::from_sql(col_type, raw)
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR | Type::UNKNOWN => {
+            String::from_sql(col_type, raw)
+                .ok()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null)
+        }
+        Type::DATE => chrono::NaiveDate::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(v.format("%Y-%m-%d").to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::TIME => chrono::NaiveTime::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(v.format("%H:%M:%S%.f").to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::TIMESTAMP => chrono::NaiveDateTime::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::TIMESTAMPTZ => chrono::DateTime::<chrono::Utc>::from_sql(col_type, raw)
+            .ok()
+            .map(|v| {
+                serde_json::Value::String(v.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        Type::JSON | Type::JSONB => serde_json::Value::from_sql(col_type, raw)
+            .ok()
+            .unwrap_or(serde_json::Value::Null),
+        Type::UUID => uuid::Uuid::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(v.to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::INET => std::net::IpAddr::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(v.to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        Type::BYTEA => Vec::<u8>::from_sql(col_type, raw)
+            .ok()
+            .map(|v| serde_json::Value::String(format!("0x{}", pg_bytes_to_hex(&v))))
+            .unwrap_or(serde_json::Value::Null),
+        Type::NUMERIC => pg_numeric_from_raw(raw)
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+        _ => match col_type.kind() {
+            Kind::Domain(inner) => pg_decode_raw_by_type(Some(raw), inner, depth + 1),
+            Kind::Enum(_) => std::str::from_utf8(raw)
+                .map(|s| serde_json::Value::String(s.to_string()))
+                .unwrap_or_else(|_| serde_json::Value::String(format!("0x{}", pg_bytes_to_hex(raw)))),
+            Kind::Array(_) | Kind::Range(_) | Kind::Multirange(_) | Kind::Composite(_) => {
+                std::str::from_utf8(raw)
+                    .map(|s| serde_json::Value::String(s.to_string()))
+                    .unwrap_or_else(|_| serde_json::Value::String(format!("0x{}", pg_bytes_to_hex(raw))))
+            }
+            Kind::Simple | Kind::Pseudo => std::str::from_utf8(raw)
+                .map(|s| serde_json::Value::String(s.to_string()))
+                .unwrap_or_else(|_| serde_json::Value::String(format!("0x{}", pg_bytes_to_hex(raw)))),
+            _ => serde_json::Value::String(format!("0x{}", pg_bytes_to_hex(raw))),
+        },
+    }
+}
+
 fn pg_value_to_json(
     row: &tokio_postgres::Row,
     idx: usize,
     col_type: &tokio_postgres::types::Type,
 ) -> serde_json::Value {
+    use serde_json::Value;
     use tokio_postgres::types::Type;
 
-    // Try the common types; fall back to string representation
+    let f64_to_json = |v: f64| {
+        serde_json::Number::from_f64(v)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    };
+
+    // Decode common concrete types first, then fall back to safe string/error text.
     match *col_type {
         Type::BOOL => row
-            .try_get::<_, bool>(idx)
+            .try_get::<_, Option<bool>>(idx)
             .ok()
-            .map(serde_json::Value::Bool)
-            .unwrap_or(serde_json::Value::Null),
+            .flatten()
+            .map(Value::Bool)
+            .unwrap_or(Value::Null),
+        Type::CHAR => row
+            .try_get::<_, Option<i8>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::Number((v as i64).into()))
+            .unwrap_or(Value::Null),
         Type::INT2 => row
-            .try_get::<_, i16>(idx)
+            .try_get::<_, Option<i16>>(idx)
             .ok()
+            .flatten()
             .map(|v| serde_json::Value::Number(v.into()))
-            .unwrap_or(serde_json::Value::Null),
+            .unwrap_or(Value::Null),
         Type::INT4 => row
-            .try_get::<_, i32>(idx)
+            .try_get::<_, Option<i32>>(idx)
             .ok()
+            .flatten()
             .map(|v| serde_json::Value::Number(v.into()))
-            .unwrap_or(serde_json::Value::Null),
+            .unwrap_or(Value::Null),
         Type::INT8 => row
-            .try_get::<_, i64>(idx)
+            .try_get::<_, Option<i64>>(idx)
             .ok()
+            .flatten()
             .map(|v| serde_json::Value::Number(v.into()))
-            .unwrap_or(serde_json::Value::Null),
+            .unwrap_or(Value::Null),
+        Type::OID => row
+            .try_get::<_, Option<u32>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::Number((v as u64).into()))
+            .unwrap_or(Value::Null),
         Type::FLOAT4 => row
-            .try_get::<_, f32>(idx)
+            .try_get::<_, Option<f32>>(idx)
             .ok()
-            .and_then(|v| serde_json::Number::from_f64(v as f64))
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
+            .flatten()
+            .map(|v| f64_to_json(v as f64))
+            .unwrap_or(Value::Null),
         Type::FLOAT8 => row
-            .try_get::<_, f64>(idx)
+            .try_get::<_, Option<f64>>(idx)
             .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR => row
-            .try_get::<_, String>(idx)
-            .ok()
-            .map(serde_json::Value::String)
-            .unwrap_or(serde_json::Value::Null),
-        _ => {
-            // Fallback: try as string
-            row.try_get::<_, String>(idx)
+            .flatten()
+            .map(f64_to_json)
+            .unwrap_or(Value::Null),
+        Type::NUMERIC => {
+            let raw = row
+                .try_get::<_, PgRawValue>(idx)
                 .ok()
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null)
+                .and_then(|v| v.0);
+            pg_decode_raw_by_type(raw.as_deref(), col_type, 0)
+        }
+        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR | Type::UNKNOWN => row
+            .try_get::<_, Option<String>>(idx)
+            .ok()
+            .flatten()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        Type::DATE => row
+            .try_get::<_, Option<chrono::NaiveDate>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.format("%Y-%m-%d").to_string()))
+            .unwrap_or(Value::Null),
+        Type::TIME => row
+            .try_get::<_, Option<chrono::NaiveTime>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.format("%H:%M:%S%.f").to_string()))
+            .unwrap_or(Value::Null),
+        Type::TIMESTAMP => row
+            .try_get::<_, Option<chrono::NaiveDateTime>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
+            .unwrap_or(Value::Null),
+        Type::TIMESTAMPTZ => row
+            .try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)))
+            .unwrap_or(Value::Null),
+        Type::JSON | Type::JSONB => row
+            .try_get::<_, Option<serde_json::Value>>(idx)
+            .ok()
+            .flatten()
+            .unwrap_or(Value::Null),
+        Type::UUID => row
+            .try_get::<_, Option<uuid::Uuid>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.to_string()))
+            .unwrap_or(Value::Null),
+        Type::INET => row
+            .try_get::<_, Option<std::net::IpAddr>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(v.to_string()))
+            .unwrap_or(Value::Null),
+        Type::BYTEA => row
+            .try_get::<_, Option<Vec<u8>>>(idx)
+            .ok()
+            .flatten()
+            .map(|v| Value::String(format!("0x{}", pg_bytes_to_hex(&v))))
+            .unwrap_or(Value::Null),
+        Type::BOOL_ARRAY => row
+            .try_get::<_, Option<Vec<bool>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(Value::Bool).collect()))
+            .unwrap_or(Value::Null),
+        Type::INT2_ARRAY => row
+            .try_get::<_, Option<Vec<i16>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| Value::Number(v.into())).collect()))
+            .unwrap_or(Value::Null),
+        Type::INT4_ARRAY => row
+            .try_get::<_, Option<Vec<i32>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| Value::Number(v.into())).collect()))
+            .unwrap_or(Value::Null),
+        Type::INT8_ARRAY => row
+            .try_get::<_, Option<Vec<i64>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| Value::Number(v.into())).collect()))
+            .unwrap_or(Value::Null),
+        Type::FLOAT4_ARRAY => row
+            .try_get::<_, Option<Vec<f32>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| f64_to_json(v as f64)).collect()))
+            .unwrap_or(Value::Null),
+        Type::FLOAT8_ARRAY => row
+            .try_get::<_, Option<Vec<f64>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(f64_to_json).collect()))
+            .unwrap_or(Value::Null),
+        Type::TEXT_ARRAY | Type::VARCHAR_ARRAY | Type::NAME_ARRAY | Type::BPCHAR_ARRAY => row
+            .try_get::<_, Option<Vec<String>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(Value::String).collect()))
+            .unwrap_or(Value::Null),
+        Type::DATE_ARRAY => row
+            .try_get::<_, Option<Vec<chrono::NaiveDate>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| {
+                Value::Array(
+                    arr.into_iter()
+                        .map(|v| Value::String(v.format("%Y-%m-%d").to_string()))
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
+        Type::TIME_ARRAY => row
+            .try_get::<_, Option<Vec<chrono::NaiveTime>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| {
+                Value::Array(
+                    arr.into_iter()
+                        .map(|v| Value::String(v.format("%H:%M:%S%.f").to_string()))
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
+        Type::TIMESTAMP_ARRAY => row
+            .try_get::<_, Option<Vec<chrono::NaiveDateTime>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| {
+                Value::Array(
+                    arr.into_iter()
+                        .map(|v| Value::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
+        Type::TIMESTAMPTZ_ARRAY => row
+            .try_get::<_, Option<Vec<chrono::DateTime<chrono::Utc>>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| {
+                Value::Array(
+                    arr.into_iter()
+                        .map(|v| {
+                            Value::String(v.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+                        })
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
+        Type::JSON_ARRAY | Type::JSONB_ARRAY => row
+            .try_get::<_, Option<Vec<serde_json::Value>>>(idx)
+            .ok()
+            .flatten()
+            .map(Value::Array)
+            .unwrap_or(Value::Null),
+        Type::UUID_ARRAY => row
+            .try_get::<_, Option<Vec<uuid::Uuid>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| Value::String(v.to_string())).collect()))
+            .unwrap_or(Value::Null),
+        Type::INET_ARRAY => row
+            .try_get::<_, Option<Vec<std::net::IpAddr>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| Value::Array(arr.into_iter().map(|v| Value::String(v.to_string())).collect()))
+            .unwrap_or(Value::Null),
+        Type::BYTEA_ARRAY => row
+            .try_get::<_, Option<Vec<Vec<u8>>>>(idx)
+            .ok()
+            .flatten()
+            .map(|arr| {
+                Value::Array(
+                    arr.into_iter()
+                        .map(|v| Value::String(format!("0x{}", pg_bytes_to_hex(&v))))
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
+        _ => {
+            if let Ok(v) = row.try_get::<_, Option<String>>(idx) {
+                return v.map(Value::String).unwrap_or(Value::Null);
+            }
+            if let Ok(v) = row.try_get::<_, Option<bool>>(idx) {
+                return v.map(Value::Bool).unwrap_or(Value::Null);
+            }
+            if let Ok(v) = row.try_get::<_, Option<i64>>(idx) {
+                return v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null);
+            }
+            if let Ok(v) = row.try_get::<_, Option<f64>>(idx) {
+                return v.map(f64_to_json).unwrap_or(Value::Null);
+            }
+            if let Ok(v) = row.try_get::<_, Option<Vec<u8>>>(idx) {
+                return v
+                    .map(|b| Value::String(format!("0x{}", pg_bytes_to_hex(&b))))
+                    .unwrap_or(Value::Null);
+            }
+
+            let raw = row
+                .try_get::<_, PgRawValue>(idx)
+                .ok()
+                .and_then(|v| v.0);
+            pg_decode_raw_by_type(raw.as_deref(), col_type, 0)
         }
     }
 }
@@ -854,22 +1316,49 @@ impl DatabaseAdapter for MySqlAdapter {
 }
 
 fn mysql_value_to_json(val: mysql_async::Value) -> serde_json::Value {
+    use serde_json::Value;
+
+    let f64_to_json = |v: f64| {
+        serde_json::Number::from_f64(v)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(v.to_string()))
+    };
+
     match val {
-        mysql_async::Value::NULL => serde_json::Value::Null,
-        mysql_async::Value::Int(i) => serde_json::Value::Number(i.into()),
-        mysql_async::Value::UInt(u) => serde_json::Value::Number(u.into()),
-        mysql_async::Value::Float(f) => serde_json::Number::from_f64(f as f64)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        mysql_async::Value::Double(f) => serde_json::Number::from_f64(f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        mysql_async::Value::Bytes(b) => {
-            String::from_utf8(b)
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null)
+        mysql_async::Value::NULL => Value::Null,
+        mysql_async::Value::Int(i) => Value::Number(i.into()),
+        mysql_async::Value::UInt(u) => Value::Number(u.into()),
+        mysql_async::Value::Float(f) => f64_to_json(f as f64),
+        mysql_async::Value::Double(f) => f64_to_json(f),
+        mysql_async::Value::Bytes(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(s) => Value::String(s),
+            Err(_) => Value::String(format!("0x{}", pg_bytes_to_hex(&bytes))),
+        },
+        mysql_async::Value::Date(year, month, day, hour, minute, second, micros) => {
+            // DATE-only values come through with a zeroed time component.
+            if hour == 0 && minute == 0 && second == 0 && micros == 0 {
+                Value::String(format!("{year:04}-{month:02}-{day:02}"))
+            } else if micros > 0 {
+                Value::String(format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}"
+                ))
+            } else {
+                Value::String(format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"
+                ))
+            }
         }
-        _ => serde_json::Value::String(format!("{:?}", val)),
+        mysql_async::Value::Time(is_negative, days, hours, minutes, seconds, micros) => {
+            let sign = if is_negative { "-" } else { "" };
+            let total_hours = u64::from(days) * 24 + u64::from(hours);
+            if micros > 0 {
+                Value::String(format!(
+                    "{sign}{total_hours}:{minutes:02}:{seconds:02}.{micros:06}"
+                ))
+            } else {
+                Value::String(format!("{sign}{total_hours}:{minutes:02}:{seconds:02}"))
+            }
+        }
     }
 }
 

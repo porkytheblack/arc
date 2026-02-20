@@ -13,6 +13,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let db = Database::new(app.handle())?;
             app.manage(db);
@@ -37,6 +39,7 @@ pub fn run() {
             list_connections,
             add_connection,
             remove_connection,
+            create_csv_connection,
             test_connection,
             connect_database,
             auto_connect_project_connections,
@@ -60,6 +63,9 @@ pub fn run() {
             list_saved_queries,
             save_query,
             delete_saved_query,
+            list_saved_charts,
+            save_saved_chart,
+            delete_saved_chart,
             list_connection_notes,
             set_connection_note,
             get_database_stats,
@@ -70,6 +76,11 @@ pub fn run() {
             remove_table_link,
             list_messages,
             add_message,
+            get_message_token_count,
+            add_message_tokens,
+            get_message_turn_count,
+            increment_message_turn,
+            reset_message_history,
             chat_completion,
             get_setting,
             set_setting,

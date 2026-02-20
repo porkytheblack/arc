@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { SAGE, CREAM, FONTS } from "../lib/theme";
+import { SAGE, FONTS } from "../lib/theme";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -120,7 +120,7 @@ export function WorkspaceHome({ onNavigate, projectId, projectName, projectDescr
                   style={{
                     fontFamily: FONTS.mono,
                     fontSize: 10,
-                    color: CREAM[200],
+                    color: "rgba(255,255,255,0.7)",
                     textTransform: "uppercase",
                     letterSpacing: "0.1em",
                     marginBottom: 8,
@@ -133,7 +133,7 @@ export function WorkspaceHome({ onNavigate, projectId, projectName, projectDescr
                     fontFamily: FONTS.display,
                     fontSize: 38,
                     lineHeight: 1,
-                    color: CREAM[50],
+                    color: "#fefdfb",
                     margin: 0,
                   }}
                 >
@@ -143,7 +143,7 @@ export function WorkspaceHome({ onNavigate, projectId, projectName, projectDescr
                   style={{
                     fontFamily: FONTS.body,
                     fontSize: 14,
-                    color: CREAM[200],
+                    color: "rgba(255,255,255,0.7)",
                     margin: "10px 0 0",
                     lineHeight: 1.6,
                   }}
@@ -155,19 +155,22 @@ export function WorkspaceHome({ onNavigate, projectId, projectName, projectDescr
                 <Button size="sm" onClick={() => onNavigate("explorations")}>
                   New Exploration
                 </Button>
+                <Button size="sm" variant="secondary" onClick={() => onNavigate("notes")}>
+                  Manage Notes
+                </Button>
                 <Button size="sm" variant="secondary" onClick={() => onNavigate("connections")}>
                   Manage Connections
                 </Button>
               </div>
             </div>
             <div style={{ display: "flex", gap: 18, marginTop: 20, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: CREAM[200] }}>
+              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
                 {connectedCount} connected sources
               </span>
-              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: CREAM[200] }}>
+              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
                 {savedQueries.length} saved queries
               </span>
-              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: CREAM[200] }}>
+              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
                 {explorations.length} explorations
               </span>
             </div>

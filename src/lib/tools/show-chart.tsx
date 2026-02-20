@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { z } from "zod";
 import { defineTool } from "glove-react";
 import {
@@ -5,6 +6,8 @@ import {
   Bar,
   LineChart,
   Line,
+  AreaChart,
+  Area,
   PieChart,
   Pie,
   Cell,
@@ -18,6 +21,7 @@ import {
 import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { SAGE, CREAM, FONTS } from "../theme";
 import { parseRenderData } from "./render-data";
+import { saveSavedChart } from "../commands";
 
 const CHART_COLORS = [
   SAGE[500],
@@ -30,17 +34,100 @@ const CHART_COLORS = [
   SAGE[400],
 ];
 
+function SaveChartButton({
+  chartType,
+  title,
+  description,
+  data,
+  xKey,
+  yKey,
+  connectionId,
+  sql,
+}: {
+  chartType: "bar" | "line" | "area" | "pie";
+  title: string;
+  description?: string;
+  data: Record<string, unknown>[];
+  xKey: string;
+  yKey: string;
+  connectionId?: string;
+  sql?: string;
+}) {
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  const handleSave = async () => {
+    if (status === "saving") return;
+    setStatus("saving");
+    try {
+      await saveSavedChart({
+        name: title,
+        description: description || "Saved from conversation chart output",
+        chartType,
+        xKey,
+        yKey,
+        connectionId: connectionId || null,
+        sql: sql || null,
+        data,
+      });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("arc:saved-charts-updated"));
+      }
+      setStatus("saved");
+      setTimeout(() => setStatus("idle"), 2500);
+    } catch {
+      setStatus("error");
+      setTimeout(() => setStatus("idle"), 3000);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button
+        onClick={handleSave}
+        disabled={status === "saving"}
+        style={{
+          border: `1px solid ${SAGE[200]}`,
+          background: CREAM[50],
+          color: status === "error" ? "#b94a48" : SAGE[700],
+          fontFamily: FONTS.mono,
+          fontSize: 10,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          padding: "5px 9px",
+          cursor: status === "saving" ? "default" : "pointer",
+          opacity: status === "saving" ? 0.7 : 1,
+        }}
+      >
+        {status === "saving" ? "Saving..." : "Save Chart"}
+      </button>
+      {status === "saved" && (
+        <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: SAGE[500] }}>
+          Saved
+        </span>
+      )}
+      {status === "error" && (
+        <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: "#b94a48" }}>
+          Failed to save
+        </span>
+      )}
+    </div>
+  );
+}
+
 const inputSchema = z.object({
   chartType: z
-    .enum(["bar", "line", "pie"])
+    .enum(["bar", "line", "area", "pie"])
     .default("bar")
     .describe("The type of chart to render"),
   title: z.string().describe("Title for the chart"),
+  description: z.string().optional().describe("Optional chart description"),
   data: z
     .array(z.record(z.string(), z.unknown()))
     .describe("Array of data objects for the chart"),
   xKey: z.string().describe("Key for the x-axis (or name key for pie)"),
   yKey: z.string().describe("Key for the y-axis (or value key for pie)"),
+  connectionId: z.string().optional().describe("Optional connection id used for this chart"),
+  sql: z.string().optional().describe("Optional SQL used to build this chart"),
 });
 
 const displayPropsSchema = inputSchema.extend({
@@ -50,7 +137,7 @@ const displayPropsSchema = inputSchema.extend({
 export const showChartTool = defineTool({
   name: "show_chart",
   description:
-    "Render a chart (bar, line, or pie) from structured data.",
+    "Render a chart (bar, line, area, or pie) from structured data.",
   inputSchema,
   displayPropsSchema,
   resolveSchema: z.void(),
@@ -68,20 +155,32 @@ export const showChartTool = defineTool({
       await display.pushAndForget({
         chartType: input.chartType,
         title: input.title,
+        description: input.description,
         data: input.data,
         xKey: input.xKey,
         yKey: input.yKey,
+        connectionId: input.connectionId,
+        sql: input.sql,
         error: null,
       });
       return {
         status: "success",
-        data: `Chart "${input.title}" rendered with ${input.data.length} data points.`,
+        data: {
+          title: input.title,
+          chartType: input.chartType,
+          points: input.data.length,
+          xKey: input.xKey,
+          yKey: input.yKey,
+        },
         renderData: {
           chartType: input.chartType,
           title: input.title,
+          description: input.description,
           data: input.data,
           xKey: input.xKey,
           yKey: input.yKey,
+          connectionId: input.connectionId,
+          sql: input.sql,
           error: null,
         },
       };
@@ -100,9 +199,12 @@ export const showChartTool = defineTool({
     const {
       chartType,
       title,
+      description,
       data: chartData,
       xKey,
       yKey,
+      connectionId,
+      sql,
       error,
     } = props;
 
@@ -137,18 +239,37 @@ export const showChartTool = defineTool({
           padding: 16,
         }}
       >
-        <span
+        <div
           style={{
-            fontFamily: FONTS.body,
-            fontSize: 13,
-            fontWeight: 600,
-            color: SAGE[800],
-            display: "block",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
             marginBottom: 12,
+            gap: 8,
           }}
         >
-          {title}
-        </span>
+          <span
+            style={{
+              fontFamily: FONTS.body,
+              fontSize: 13,
+              fontWeight: 600,
+              color: SAGE[800],
+              display: "block",
+            }}
+          >
+            {title}
+          </span>
+          <SaveChartButton
+            chartType={chartType}
+            title={title}
+            description={description}
+            data={chartData as Record<string, unknown>[]}
+            xKey={xKey}
+            yKey={yKey}
+            connectionId={connectionId}
+            sql={sql}
+          />
+        </div>
         <ResponsiveContainer width="100%" height={280}>
           {chartType === "pie" ? (
             <PieChart>
@@ -215,6 +336,28 @@ export const showChartTool = defineTool({
                 dot={{ fill: SAGE[600], r: 3 }}
               />
             </LineChart>
+          ) : chartType === "area" ? (
+            <AreaChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={SAGE[100]} />
+              <XAxis
+                dataKey={xKey}
+                tick={{ fontFamily: FONTS.mono, fontSize: 11, fill: SAGE[500] }}
+                stroke={SAGE[200]}
+              />
+              <YAxis
+                tick={{ fontFamily: FONTS.mono, fontSize: 11, fill: SAGE[500] }}
+                stroke={SAGE[200]}
+              />
+              <Tooltip
+                contentStyle={{
+                  fontFamily: FONTS.mono,
+                  fontSize: 12,
+                  background: CREAM[50],
+                  border: `1px solid ${SAGE[200]}`,
+                }}
+              />
+              <Area type="monotone" dataKey={yKey} stroke={SAGE[600]} fill={SAGE[100]} strokeWidth={2} />
+            </AreaChart>
           ) : (
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke={SAGE[100]} />
@@ -249,9 +392,12 @@ export const showChartTool = defineTool({
     const {
       chartType,
       title,
+      description,
       data: chartData,
       xKey,
       yKey,
+      connectionId,
+      sql,
       error,
     } = parsed;
 
@@ -286,18 +432,37 @@ export const showChartTool = defineTool({
           padding: 16,
         }}
       >
-        <span
+        <div
           style={{
-            fontFamily: FONTS.body,
-            fontSize: 13,
-            fontWeight: 600,
-            color: SAGE[800],
-            display: "block",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
             marginBottom: 12,
+            gap: 8,
           }}
         >
-          {title}
-        </span>
+          <span
+            style={{
+              fontFamily: FONTS.body,
+              fontSize: 13,
+              fontWeight: 600,
+              color: SAGE[800],
+              display: "block",
+            }}
+          >
+            {title}
+          </span>
+          <SaveChartButton
+            chartType={chartType}
+            title={title}
+            description={description}
+            data={chartData as Record<string, unknown>[]}
+            xKey={xKey}
+            yKey={yKey}
+            connectionId={connectionId}
+            sql={sql}
+          />
+        </div>
         <ResponsiveContainer width="100%" height={280}>
           {chartType === "pie" ? (
             <PieChart>
@@ -364,6 +529,28 @@ export const showChartTool = defineTool({
                 dot={{ fill: SAGE[600], r: 3 }}
               />
             </LineChart>
+          ) : chartType === "area" ? (
+            <AreaChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={SAGE[100]} />
+              <XAxis
+                dataKey={xKey}
+                tick={{ fontFamily: FONTS.mono, fontSize: 11, fill: SAGE[500] }}
+                stroke={SAGE[200]}
+              />
+              <YAxis
+                tick={{ fontFamily: FONTS.mono, fontSize: 11, fill: SAGE[500] }}
+                stroke={SAGE[200]}
+              />
+              <Tooltip
+                contentStyle={{
+                  fontFamily: FONTS.mono,
+                  fontSize: 12,
+                  background: CREAM[50],
+                  border: `1px solid ${SAGE[200]}`,
+                }}
+              />
+              <Area type="monotone" dataKey={yKey} stroke={SAGE[600]} fill={SAGE[100]} strokeWidth={2} />
+            </AreaChart>
           ) : (
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke={SAGE[100]} />

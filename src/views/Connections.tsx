@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 import { Input } from "../components/Input";
+import { Select } from "../components/Select";
 import {
   listConnections,
   addConnection,
@@ -512,25 +513,15 @@ function AddConnectionForm({ onClose, onAdd }: AddConnectionFormProps) {
           <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500] }}>
             Database Type
           </label>
-          <select
+          <Select
             value={dbType}
-            onChange={(e) => handleTypeChange(e.target.value)}
+            onChange={handleTypeChange}
+            options={DB_TYPES.map((t) => ({ value: t, label: t }))}
+            minWidth={0}
             style={{
               width: "100%",
-              padding: "10px 12px",
-              border: `1px solid ${SAGE[200]}`,
-              background: CREAM[50],
-              fontFamily: FONTS.body,
-              fontSize: 14,
-              color: SAGE[900],
-              outline: "none",
-              appearance: "none",
             }}
-          >
-            {DB_TYPES.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+          />
         </div>
 
         {isSqlite ? (
@@ -757,6 +748,7 @@ export function Connections({ projectId }: { projectId?: string }) {
         }
         return next;
       });
+      window.dispatchEvent(new CustomEvent("arc:notes-updated"));
       return null;
     } catch (err: unknown) {
       return err instanceof Error ? err.message : String(err);
@@ -936,15 +928,23 @@ export function Connections({ projectId }: { projectId?: string }) {
         </div>
 
         {/* CSV Import */}
-        <div style={{ marginTop: 32 }}>
-          <h2 style={{ fontFamily: FONTS.body, fontSize: 14, fontWeight: 600, color: SAGE[900], margin: "0 0 12px" }}>
-            Import CSV
-          </h2>
-          <p style={{ fontFamily: FONTS.body, fontSize: 12, color: SAGE[500], marginBottom: 16 }}>
-            Import a CSV file as a queryable table
-          </p>
-          <CsvImport />
-        </div>
+        {projectId && (
+          <div style={{ marginTop: 32 }}>
+            <h2 style={{ fontFamily: FONTS.body, fontSize: 14, fontWeight: 600, color: SAGE[900], margin: "0 0 12px" }}>
+              Import CSV
+            </h2>
+            <p style={{ fontFamily: FONTS.body, fontSize: 12, color: SAGE[500], marginBottom: 16 }}>
+              Upload a CSV file to create a queryable SQLite connection
+            </p>
+            <CsvImport
+              projectId={projectId}
+              onImported={(conn) => {
+                setConnections((prev) => [...prev, conn]);
+                setAllConnections((prev) => [...prev, conn]);
+              }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

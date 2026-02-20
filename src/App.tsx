@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { CREAM } from "./lib/theme";
+import { ThemeProvider } from "./lib/theme-context";
+import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { WorkspaceHome } from "./views/WorkspaceHome";
@@ -7,16 +8,15 @@ import { Explorations } from "./views/Explorations";
 import { Charts } from "./views/Charts";
 import { QueryLibrary } from "./views/QueryLibrary";
 import { Connections } from "./views/Connections";
+import { Notes } from "./views/Notes";
 import { Settings } from "./views/Settings";
 import { ProjectSelect } from "./views/ProjectSelect";
-import { QueryScanner } from "./views/QueryScanner";
-import { TableLinks } from "./views/TableLinks";
 import { SchemaViewer } from "./views/SchemaViewer";
 import { Button } from "./components/Button";
 import type { Project } from "./lib/commands";
 import "./styles.css";
 
-type ViewId = "home" | "explorations" | "charts" | "queries" | "connections" | "settings" | "scanner" | "links" | "schema";
+type ViewId = "home" | "explorations" | "charts" | "queries" | "notes" | "connections" | "settings" | "schema";
 
 interface ViewConfig {
   title: string;
@@ -28,8 +28,7 @@ const VIEW_CONFIG: Record<ViewId, ViewConfig> = {
   explorations: { title: "Explorations", subtitle: "Conversation threads" },
   charts: { title: "Charts", subtitle: "Data visualizations" },
   queries: { title: "Query Library", subtitle: "Saved queries" },
-  scanner: { title: "Query Scanner", subtitle: "Find SQL in your codebase" },
-  links: { title: "Table Links", subtitle: "Table relationships" },
+  notes: { title: "Notes", subtitle: "Context for the agent" },
   schema: { title: "Schema", subtitle: "Database tables" },
   connections: { title: "Connections", subtitle: "Database management" },
   settings: { title: "Settings", subtitle: "App configuration" },
@@ -53,7 +52,11 @@ export default function App() {
 
   // Show project selection screen first
   if (!selectedProject) {
-    return <ProjectSelect onSelect={setSelectedProject} />;
+    return (
+      <ThemeProvider>
+        <ProjectSelect onSelect={setSelectedProject} />
+      </ThemeProvider>
+    );
   }
 
   const config = VIEW_CONFIG[activeView] || VIEW_CONFIG.home;
@@ -74,10 +77,8 @@ export default function App() {
         return <Charts />;
       case "queries":
         return <QueryLibrary />;
-      case "scanner":
-        return <QueryScanner />;
-      case "links":
-        return <TableLinks />;
+      case "notes":
+        return <Notes projectId={selectedProject.id} />;
       case "schema":
         return <SchemaViewer />;
       case "connections":
@@ -97,26 +98,29 @@ export default function App() {
   };
 
   return (
+    <ThemeProvider>
     <div
       style={{
         display: "flex",
+        flexDirection: "column",
         width: "100%",
         height: "100vh",
-        background: CREAM[100],
         overflow: "hidden",
       }}
     >
-      <Sidebar
-        activeView={activeView}
-        onNavigate={navigateTo}
-        onSwitchProject={() => {
-          setSelectedProject(null);
-          setKeepExplorationsMounted(false);
-          setActiveView("home");
-        }}
-      />
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <Header
+      <TitleBar />
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+        <Sidebar
+          activeView={activeView}
+          onNavigate={navigateTo}
+          onSwitchProject={() => {
+            setSelectedProject(null);
+            setKeepExplorationsMounted(false);
+            setActiveView("home");
+          }}
+        />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <Header
           title={config.title}
           subtitle={headerSubtitle}
           actions={
@@ -137,6 +141,7 @@ export default function App() {
               }}
             >
               <Explorations
+                key={selectedProject.id}
                 projectId={selectedProject.id}
                 projectName={selectedProject.name}
                 projectDescription={selectedProject.description}
@@ -149,7 +154,9 @@ export default function App() {
             </div>
           )}
         </div>
+        </div>
       </div>
     </div>
+    </ThemeProvider>
   );
 }

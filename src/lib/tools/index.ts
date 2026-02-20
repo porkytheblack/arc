@@ -18,6 +18,9 @@ import { compactResultTool } from "./compact-result";
 import { getTableMetadataTool } from "./get-table-metadata";
 import { explainQueryTool } from "./explain-query";
 import { executeSavedQueryTool } from "./execute-saved-query";
+import { mergeResultsTool } from "./merge-results";
+
+type ToolResult = Awaited<ReturnType<ToolConfig["do"]>>;
 
 const rawTools: ToolConfig[] = [
   executeQueryTool,
@@ -39,14 +42,32 @@ const rawTools: ToolConfig[] = [
   getTableMetadataTool,
   explainQueryTool,
   executeSavedQueryTool,
+  mergeResultsTool,
 ];
 
 const TOOL_UI_DISPLAY = "UI_DISPLAY: yes. This tool renders its own UI output in the chat interface. Do not repeat the full displayed payload in assistant text unless the user explicitly asks for it.";
+
+function withStableToolMessage(result: ToolResult): ToolResult {
+  if (result.message) return result;
+  if (typeof result.data === "string") return result;
+
+  return {
+    ...result,
+    message:
+      result.status === "error"
+        ? "Tool failed. See tool output for details."
+        : "Tool completed. See tool output for details.",
+  };
+}
 
 function withDisplayMetadata(tool: ToolConfig): ToolConfig {
   return {
     ...tool,
     description: `${tool.description} ${TOOL_UI_DISPLAY}`,
+    async do(input, display) {
+      const result = await tool.do(input, display);
+      return withStableToolMessage(result);
+    },
   };
 }
 
@@ -72,4 +93,5 @@ export {
   getTableMetadataTool,
   explainQueryTool,
   executeSavedQueryTool,
+  mergeResultsTool,
 };

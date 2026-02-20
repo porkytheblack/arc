@@ -1,19 +1,22 @@
 import { useState, useRef, useCallback } from "react";
 import { SAGE, CREAM, FONTS } from "../lib/theme";
-import { importCsv } from "../lib/commands";
-import type { QueryResult } from "../lib/commands";
+import { createCsvConnection, importCsv } from "../lib/commands";
+import type { DatabaseConnection, QueryResult } from "../lib/commands";
 import { DataTable } from "./DataTable";
-import { Upload, X, FileSpreadsheet } from "lucide-react";
+import { Upload, X, FileSpreadsheet, CheckCircle } from "lucide-react";
 import { Button } from "./Button";
 
 interface CsvImportProps {
-  onImported?: (result: QueryResult, tableName: string) => void;
+  projectId?: string;
+  onImported?: (conn: DatabaseConnection) => void;
+  onPreviewImported?: (result: QueryResult, tableName: string) => void;
 }
 
-export function CsvImport({ onImported }: CsvImportProps) {
+export function CsvImport({ projectId, onImported, onPreviewImported }: CsvImportProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [connection, setConnection] = useState<DatabaseConnection | null>(null);
+  const [previewResult, setPreviewResult] = useState<QueryResult | null>(null);
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -30,15 +33,23 @@ export function CsvImport({ onImported }: CsvImportProps) {
 
     try {
       const content = await file.text();
-      const tableName = file.name.replace(/\.csv$/i, "").replace(/[^a-zA-Z0-9_]/g, "_");
-      const queryResult = await importCsv(content, tableName);
-      setResult(queryResult);
-      onImported?.(queryResult, tableName);
+      if (projectId) {
+        // Connection mode: create SQLite DB and connection
+        const conn = await createCsvConnection(content, file.name, projectId);
+        setConnection(conn);
+        onImported?.(conn);
+      } else {
+        // Preview mode: just parse and show preview
+        const tableName = file.name.replace(/\.csv$/i, "").replace(/[^a-zA-Z0-9_]/g, "_");
+        const result = await importCsv(content, tableName);
+        setPreviewResult(result);
+        onPreviewImported?.(result, tableName);
+      }
     } catch (e) {
-      setError(typeof e === "string" ? e : "Failed to import CSV");
+      setError(typeof e === "string" ? e : e instanceof Error ? e.message : "Failed to import CSV");
     }
     setImporting(false);
-  }, [onImported]);
+  }, [projectId, onImported, onPreviewImported]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -62,14 +73,17 @@ export function CsvImport({ onImported }: CsvImportProps) {
   }, [handleFile]);
 
   const handleReset = useCallback(() => {
-    setResult(null);
+    setConnection(null);
+    setPreviewResult(null);
     setFileName("");
     setError(null);
   }, []);
 
+  const hasResult = connection || previewResult;
+
   return (
     <div style={{ marginBottom: 20 }}>
-      {!result ? (
+      {!hasResult ? (
         <div
           onDrop={handleDrop}
           onDragOver={handleDragOver}
@@ -111,7 +125,7 @@ export function CsvImport({ onImported }: CsvImportProps) {
                 ))}
               </div>
               <span style={{ fontFamily: FONTS.body, fontSize: 13, color: SAGE[500] }}>
-                Importing {fileName}...
+                {projectId ? `Creating connection from ${fileName}...` : `Importing ${fileName}...`}
               </span>
             </>
           ) : (
@@ -121,7 +135,7 @@ export function CsvImport({ onImported }: CsvImportProps) {
                 Drop a CSV file here or click to browse
               </span>
               <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: SAGE[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                CSV files only
+                {projectId ? "Creates a queryable SQLite connection" : "CSV files only"}
               </span>
             </>
           )}
@@ -131,7 +145,45 @@ export function CsvImport({ onImported }: CsvImportProps) {
             </span>
           )}
         </div>
-      ) : (
+      ) : connection ? (
+        <div
+          style={{
+            background: CREAM[50],
+            border: `1px solid ${SAGE[100]}`,
+            padding: 20,
+            animation: "slideUp 0.25s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <CheckCircle size={16} color={SAGE[500]} />
+              <span style={{ fontFamily: FONTS.body, fontSize: 13, fontWeight: 600, color: SAGE[900] }}>
+                {fileName}
+              </span>
+              <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: SAGE[400] }}>
+                Connection created
+              </span>
+            </div>
+            <button
+              onClick={handleReset}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}
+            >
+              <X size={14} color={SAGE[400]} />
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <FileSpreadsheet size={14} color={SAGE[400]} />
+            <span style={{ fontFamily: FONTS.mono, fontSize: 12, color: SAGE[600] }}>
+              {connection.name} — SQLite connection ready
+            </span>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Button size="sm" variant="secondary" onClick={handleReset}>
+              Import another
+            </Button>
+          </div>
+        </div>
+      ) : previewResult ? (
         <div
           style={{
             background: CREAM[50],
@@ -147,7 +199,7 @@ export function CsvImport({ onImported }: CsvImportProps) {
                 {fileName}
               </span>
               <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: SAGE[400] }}>
-                {result.row_count} rows, {result.columns.length} columns
+                {previewResult.row_count} rows, {previewResult.columns.length} columns
               </span>
             </div>
             <button
@@ -158,23 +210,23 @@ export function CsvImport({ onImported }: CsvImportProps) {
             </button>
           </div>
           <DataTable
-            columns={result.columns}
-            rows={result.rows.slice(0, 10) as (string | number | boolean | null)[][]}
+            columns={previewResult.columns}
+            rows={previewResult.rows.slice(0, 10) as (string | number | boolean | null)[][]}
           />
-          {result.row_count > 10 && (
+          {previewResult.row_count > 10 && (
             <div style={{ marginTop: 8 }}>
               <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: SAGE[400] }}>
-                Showing 10 of {result.row_count} rows
+                Showing 10 of {previewResult.row_count} rows
               </span>
             </div>
           )}
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+          <div style={{ marginTop: 12 }}>
             <Button size="sm" variant="secondary" onClick={handleReset}>
               Import another
             </Button>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 // Arc Design Tokens
-// Extracted from arc-brand-guidelines.md and glove-coffee.jsx
+// Colors resolve via CSS custom properties set by theme-manager.ts
 
 import type React from "react";
 
@@ -57,30 +57,30 @@ interface Mixins {
 }
 
 export const SAGE: ColorScale = {
-  50: "#f0f4f0",
-  100: "#dce5dc",
-  200: "#b8cab8",
-  300: "#8fa88f",
-  400: "#6b8a6b",
-  500: "#4a6b4a",
-  600: "#3d5a3d",
-  700: "#2d422d",
-  800: "#1e2e1e",
-  900: "#111a11",
-  950: "#0a100a",
+  50: "var(--primary-50)",
+  100: "var(--primary-100)",
+  200: "var(--primary-200)",
+  300: "var(--primary-300)",
+  400: "var(--primary-400)",
+  500: "var(--primary-500)",
+  600: "var(--primary-600)",
+  700: "var(--primary-700)",
+  800: "var(--primary-800)",
+  900: "var(--primary-900)",
+  950: "var(--primary-950)",
 };
 
 export const CREAM: CreamScale = {
-  50: "#fefdfb",
-  100: "#faf7f2",
-  200: "#f2ebe0",
-  300: "#e8dcc8",
+  50: "var(--bg-50)",
+  100: "var(--bg-100)",
+  200: "var(--bg-200)",
+  300: "var(--bg-300)",
 };
 
 export const SEMANTIC: SemanticColors = {
-  success: "#4ade80",
-  warning: "#d4a853",
-  error: "#c45c5c",
+  success: "var(--semantic-success)",
+  warning: "var(--semantic-warning)",
+  error: "var(--semantic-error)",
 };
 
 export const FONTS: FontFamilies = {

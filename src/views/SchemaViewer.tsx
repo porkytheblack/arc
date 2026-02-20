@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { SAGE, FONTS } from "../lib/theme";
 import { Card } from "../components/Card";
 import { Tag } from "../components/Tag";
+import { Select } from "../components/Select";
 import { listConnections, getSchema } from "../lib/commands";
 import type { DatabaseConnection, TableSchema } from "../lib/commands";
 import { Table2, Key, ChevronDown, ChevronRight } from "lucide-react";
@@ -179,24 +180,14 @@ export function SchemaViewer() {
               </p>
             </div>
             {connections.length > 1 && (
-              <select
+              <Select
                 value={selectedConn}
-                onChange={(e) => setSelectedConn(e.target.value)}
+                onChange={setSelectedConn}
+                options={connections.map((c) => ({ value: c.id, label: c.name }))}
                 style={{
-                  padding: "8px 12px",
-                  border: `1px solid ${SAGE[200]}`,
-                  background: SAGE[50],
-                  fontFamily: FONTS.body,
-                  fontSize: 12,
-                  color: SAGE[900],
-                  outline: "none",
-                  appearance: "none",
+                  minWidth: 180,
                 }}
-              >
-                {connections.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              />
             )}
           </div>
         </div>

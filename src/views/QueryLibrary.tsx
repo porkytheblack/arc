@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { Button } from "../components/Button";
 import { Tag } from "../components/Tag";
 import { Input } from "../components/Input";
+import { Select } from "../components/Select";
 import {
   listSavedQueries,
   saveQuery,
@@ -157,6 +158,11 @@ function NewQueryForm({ connections, onClose, onSave }: NewQueryFormProps) {
     }
   };
 
+  const connectionOptions = connections.map((conn) => ({
+    value: conn.id,
+    label: `${conn.name} (${conn.db_type})`,
+  }));
+
   return (
     <Card style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -174,28 +180,17 @@ function NewQueryForm({ connections, onClose, onSave }: NewQueryFormProps) {
           <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500] }}>
             Connection
           </label>
-          <select
+          <Select
             value={connectionId}
-            onChange={(e) => setConnectionId(e.target.value)}
+            onChange={setConnectionId}
+            options={connectionOptions}
+            placeholder="No connections available"
+            disabled={connectionOptions.length === 0}
+            minWidth={0}
             style={{
               width: "100%",
-              padding: "10px 12px",
-              border: `1px solid ${SAGE[200]}`,
-              background: CREAM[50],
-              fontFamily: FONTS.body,
-              fontSize: 14,
-              color: SAGE[900],
-              outline: "none",
-              appearance: "none",
             }}
-          >
-            {connections.length === 0 && <option value="">No connections available</option>}
-            {connections.map((conn) => (
-              <option key={conn.id} value={conn.id}>
-                {conn.name} ({conn.db_type})
-              </option>
-            ))}
-          </select>
+          />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500] }}>

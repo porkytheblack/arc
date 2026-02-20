@@ -19,11 +19,24 @@
         "minWidth": 960,
         "minHeight": 600,
         "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "resizable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' https://*.anthropic.com https://*.openai.com https://*.openrouter.ai https://*.googleapis.com https://*.minimax.io https://*.moonshot.ai https://*.bigmodel.cn https://*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "YOUR_PUBLIC_KEY_HERE",
+      "endpoints": [
+        "https://YOUR_OASIS_SERVER/arc/update/{{target}}-{{arch}}/{{current_version}}"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "bundle": {

@@ -88,7 +88,7 @@ export const importCsvTool = defineTool({
     return (
       <div style={{ marginTop: 8 }}>
         <CsvImport
-          onImported={(result, importedTableName) =>
+          onPreviewImported={(result, importedTableName) =>
             resolve({
               result,
               tableName: importedTableName || input.tableName,

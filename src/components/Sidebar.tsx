@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { SAGE, CREAM, FONTS } from "../lib/theme";
+import { SAGE, CREAM } from "../lib/theme";
 import {
   Home,
   MessageSquare,
@@ -7,10 +7,9 @@ import {
   BookOpen,
   Database,
   Settings,
-  Search,
-  Link,
   FolderOpen,
   Table2,
+  StickyNote,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -38,8 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "explorations", icon: MessageSquare, label: "Explorations" },
   { id: "charts", icon: BarChart3, label: "Charts" },
   { id: "queries", icon: BookOpen, label: "Queries" },
-  { id: "scanner", icon: Search, label: "Query Scanner" },
-  { id: "links", icon: Link, label: "Table Links" },
+  { id: "notes", icon: StickyNote, label: "Notes" },
   { id: "schema", icon: Table2, label: "Schema" },
 ];
 
@@ -108,28 +106,16 @@ export function Sidebar({ activeView, onNavigate, onSwitchProject }: SidebarProp
       }}
     >
       {/* Logo */}
-      <div
+      <img
+        src="/arc-logo.png"
+        alt="Arc"
         style={{
           width: 32,
           height: 32,
-          background: SAGE[900],
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
+          objectFit: "contain",
           marginBottom: 12,
         }}
-      >
-        <span
-          style={{
-            fontFamily: FONTS.display,
-            fontSize: 16,
-            color: CREAM[50],
-            lineHeight: 1,
-          }}
-        >
-          A
-        </span>
-      </div>
+      />
 
       {/* Switch project */}
       {onSwitchProject && (

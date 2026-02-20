@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { SAGE, CREAM, FONTS } from "../lib/theme";
+import { SAGE, CREAM, FONTS, SEMANTIC } from "../lib/theme";
 import {
   listExplorations,
   createExploration,
@@ -16,7 +16,7 @@ import type {
   SavedQuery,
   ConnectionNote,
 } from "../lib/commands";
-import { GloveProvider, useGlove } from "glove-react";
+import { GloveProvider, Render, useGlove } from "glove-react";
 import type { TimelineEntry } from "glove-react";
 import { createArcClient } from "../lib/glove-client";
 import type { ProjectContext } from "../lib/glove-client";
@@ -27,12 +27,29 @@ import {
   type SavedQueryParamValue,
 } from "../lib/saved-query-utils";
 import { Plus, Send, Trash2, Search } from "lucide-react";
-import type { ReactNode } from "react";
 import { SendMessageProvider } from "../lib/send-message-context";
+import { Select } from "../components/Select";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const AUTO_CONNECT_ATTEMPTED = new Set<string>();
+const COMPACTION_MESSAGE_PREFIX = "[Conversation summary from compaction]";
+const ACTIVE_CONNECTION_STORAGE_PREFIX = "arc.active_connection_by_exploration";
+
+function isCompactionMessageText(text: string): boolean {
+  return text.trimStart().startsWith(COMPACTION_MESSAGE_PREFIX);
+}
+
+function isCompactionTimelineEntry(entry: TimelineEntry): boolean {
+  const withCompaction = entry as TimelineEntry & { is_compaction?: boolean };
+  if (withCompaction.is_compaction === true) {
+    return true;
+  }
+  if (entry.kind === "user" || entry.kind === "agent_text") {
+    return isCompactionMessageText(entry.text);
+  }
+  return false;
+}
 
 interface SavedQuerySlashCommand {
   reference: string;
@@ -118,27 +135,16 @@ function TypingIndicator({ showAvatar = true }: { showAvatar?: boolean }) {
       }}
     >
       {showAvatar ? (
-        <div
+        <img
+          src="/arc-logo.png"
+          alt="Arc"
           style={{
             width: 28,
             height: 28,
-            background: SAGE[100],
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            objectFit: "contain",
             flexShrink: 0,
           }}
-        >
-          <span
-            style={{
-              fontFamily: FONTS.display,
-              fontSize: 14,
-              color: SAGE[600],
-            }}
-          >
-            A
-          </span>
-        </div>
+        />
       ) : (
         <div style={{ width: 28, flexShrink: 0 }} />
       )}
@@ -200,28 +206,17 @@ function UserBubble({ text }: { text: string }) {
 
 function BotAvatar() {
   return (
-    <div
+    <img
+      src="/arc-logo.png"
+      alt="Arc"
       style={{
         width: 28,
         height: 28,
-        background: SAGE[100],
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
+        objectFit: "contain",
         flexShrink: 0,
         marginTop: 2,
       }}
-    >
-      <span
-        style={{
-          fontFamily: FONTS.display,
-          fontSize: 14,
-          color: SAGE[600],
-        }}
-      >
-        A
-      </span>
-    </div>
+    />
   );
 }
 
@@ -303,8 +298,8 @@ function AgentTextBubble({
                         display: "block",
                         fontFamily: FONTS.mono,
                         fontSize: 12,
-                        background: SAGE[950],
-                        color: CREAM[50],
+                        background: SAGE[50],
+                        color: SAGE[900],
                         padding: "10px 12px",
                         overflowX: "auto",
                         lineHeight: 1.6,
@@ -358,80 +353,104 @@ function AgentTextBubble({
   );
 }
 
-function ToolEntry({
-  entry,
-  renderedSlot,
+function CompactionNotice({ spacing = 24 }: { spacing?: number }) {
+  return (
+    <div
+      style={{
+        marginBottom: spacing,
+        display: "flex",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: FONTS.mono,
+          fontSize: 11,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: SAGE[500],
+          background: SAGE[50],
+          border: `1px solid ${SAGE[100]}`,
+          padding: "6px 10px",
+        }}
+      >
+        Conversation compacted for context window
+      </div>
+    </div>
+  );
+}
+
+function isBotTimelineEntry(entry: TimelineEntry | null | undefined): boolean {
+  if (!entry) return false;
+  return isCompactionTimelineEntry(entry) || entry.kind === "agent_text" || entry.kind === "tool";
+}
+
+function getBotEntryLayout(timeline: TimelineEntry[], index: number): { showAvatar: boolean; spacing: number } {
+  const prevEntry = index > 0 ? timeline[index - 1] : null;
+  const nextEntry = index < timeline.length - 1 ? timeline[index + 1] : null;
+  return {
+    showAvatar: !isBotTimelineEntry(prevEntry),
+    spacing: isBotTimelineEntry(nextEntry) ? 8 : 24,
+  };
+}
+
+function ToolRunningStatus({
+  toolName,
   showAvatar = true,
   spacing = 24,
 }: {
-  entry: TimelineEntry & { kind: "tool" };
-  renderedSlot: ReactNode;
+  toolName: string;
   showAvatar?: boolean;
   spacing?: number;
 }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const t = setTimeout(() => setVisible(true), 50);
-    return () => clearTimeout(t);
+    const timer = window.setTimeout(() => setVisible(true), 1000);
+    return () => window.clearTimeout(timer);
   }, []);
 
+  if (!visible) return null;
+
   return (
-    <div
-      style={{
-        marginBottom: spacing,
-        opacity: visible ? 1 : 0,
-        transform: visible ? "translateY(0)" : "translateY(8px)",
-        transition: "all 0.35s ease",
-      }}
-    >
+    <div style={{ marginBottom: spacing }}>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
         {showAvatar ? <BotAvatar /> : <AvatarSpacer />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {entry.status === "running" && !renderedSlot && (
-            <div
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "8px 0",
+            }}
+          >
+            <div style={{ display: "flex", gap: 4 }}>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 6,
+                    height: 6,
+                    background: SAGE[300],
+                    borderRadius: "50%",
+                    animation: `typingDot 1.2s ease-in-out ${i * 0.15}s infinite`,
+                  }}
+                />
+              ))}
+            </div>
+            <span
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 0",
+                fontFamily: FONTS.mono,
+                fontSize: 11,
+                color: SAGE[400],
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
               }}
             >
-              <div
-                style={{
-                  width: 6,
-                  height: 6,
-                  background: SAGE[400],
-                  borderRadius: "50%",
-                  animation: "typingDot 1.2s ease-in-out infinite",
-                }}
-              />
-              <span
-                style={{
-                  fontFamily: FONTS.mono,
-                  fontSize: 11,
-                  color: SAGE[400],
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                Running {entry.name}
-              </span>
-            </div>
-          )}
-          {renderedSlot}
-          {!renderedSlot && entry.status !== "running" && entry.output && (
-            <div
-              style={{
-                fontFamily: FONTS.body,
-                fontSize: 13,
-                color: SAGE[700],
-                lineHeight: 1.6,
-              }}
-            >
-              {entry.output}
-            </div>
-          )}
+              Running {toolName}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -443,23 +462,66 @@ function ToolEntry({
 function ConversationPanel({
   explorationId,
   savedQueries,
+  connections,
+  activeConnectionId: selectedConnectionId,
+  onActiveConnectionChange,
 }: {
   explorationId: string;
   savedQueries: SavedQuery[];
+  connections: DatabaseConnection[];
+  activeConnectionId: string;
+  onActiveConnectionChange: (connectionId: string) => void;
 }) {
-  const {
-    timeline,
-    streamingText,
-    busy,
-    slots,
-    sendMessage,
-    renderSlot,
-    renderToolResult,
-  } = useGlove({ sessionId: explorationId });
+  const glove = useGlove({ sessionId: explorationId });
+  const { timeline, streamingText, busy, slots, sendMessage, abort } = glove;
 
   const [input, setInput] = useState("");
   const [inputError, setInputError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const visibleTimeline = timeline;
+  const availableConnections = useMemo(() => {
+    const connected = connections.filter((c) => c.connected);
+    return connected.length > 0 ? connected : connections;
+  }, [connections]);
+  const lastSentConnectionIdRef = useRef<string | null>(null);
+
+  const activeConnectionId = useMemo(() => {
+    if (availableConnections.length === 0) return "";
+    const exists = availableConnections.some((c) => c.id === selectedConnectionId);
+    return exists ? selectedConnectionId : availableConnections[0].id;
+  }, [availableConnections, selectedConnectionId]);
+
+  useEffect(() => {
+    if (activeConnectionId !== selectedConnectionId) {
+      onActiveConnectionChange(activeConnectionId);
+    }
+    if (!activeConnectionId) {
+      lastSentConnectionIdRef.current = null;
+    }
+  }, [activeConnectionId, selectedConnectionId, onActiveConnectionChange]);
+
+  const activeConnection = availableConnections.find((c) => c.id === activeConnectionId) ?? null;
+
+  const withConnectionSwitchPreamble = useCallback(
+    (message: string) => {
+      if (!activeConnection) return message;
+      if (lastSentConnectionIdRef.current == null) {
+        lastSentConnectionIdRef.current = activeConnection.id;
+        return message;
+      }
+      if (lastSentConnectionIdRef.current === activeConnection.id) {
+        return message;
+      }
+      lastSentConnectionIdRef.current = activeConnection.id;
+      return [
+        `Switched connection to "${activeConnection.name}" (id: "${activeConnection.id}").`,
+        "Use this connection as the default for subsequent tool calls unless explicitly overridden.",
+        "",
+        message,
+      ].join("\n");
+    },
+    [activeConnection]
+  );
 
   // Scroll to bottom when timeline changes
   useEffect(() => {
@@ -473,7 +535,7 @@ function ConversationPanel({
         }
       }, 100);
     }
-  }, [timeline, streamingText, busy, slots]);
+  }, [visibleTimeline, streamingText, busy, slots]);
 
   const handleSend = useCallback(() => {
     if (!input.trim() || busy) return;
@@ -511,41 +573,17 @@ function ConversationPanel({
         `Call execute_saved_query with queryRef "${matched.id}" and params ${JSON.stringify(slash.params)}.`,
         "After the tool finishes, give only a short follow-up sentence.",
       ].join("\n");
-      sendMessage(syntheticPrompt);
+      sendMessage(withConnectionSwitchPreamble(syntheticPrompt));
       return;
     }
 
-    sendMessage(text);
-  }, [input, busy, sendMessage, savedQueries]);
+    sendMessage(withConnectionSwitchPreamble(text));
+  }, [input, busy, sendMessage, savedQueries, withConnectionSwitchPreamble]);
 
-  // Match slots to tool timeline entries by tool call ID.
-  const { toolSlotMap, unclaimedSlots } = useMemo(() => {
-    const claimed = new Set<string>();
-    const map = new Map<string, ReactNode>();
-    const slotsByToolCallId = new Map<string, typeof slots[number]>();
-
-    for (const slot of slots) {
-      if (slot.toolCallId) {
-        slotsByToolCallId.set(slot.toolCallId, slot);
-      }
-    }
-
-    // First pass: exact match by tool call ID
-    for (let i = 0; i < timeline.length; i++) {
-      const entry = timeline[i];
-      if (entry.kind !== "tool") continue;
-
-      const matchingSlot = slotsByToolCallId.get(entry.id);
-      if (matchingSlot) {
-        claimed.add(matchingSlot.id);
-        map.set(entry.id, renderSlot(matchingSlot));
-      }
-    }
-
-    // Unclaimed slots (e.g. pushAndWait dialogs not yet in timeline)
-    const unclaimed = slots.filter((s) => !claimed.has(s.id));
-    return { toolSlotMap: map, unclaimedSlots: unclaimed };
-  }, [timeline, slots, renderSlot]);
+  const handleAbort = useCallback(() => {
+    if (!busy) return;
+    abort();
+  }, [busy, abort]);
 
   return (
     <SendMessageProvider value={sendMessage}>
@@ -557,6 +595,50 @@ function ConversationPanel({
         background: CREAM[100],
       }}
     >
+      {availableConnections.length > 1 && (
+        <div
+          style={{
+            borderBottom: `1px solid ${SAGE[100]}`,
+            background: CREAM[50],
+            padding: "8px 24px",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 720,
+              margin: "0 auto",
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 10,
+                color: SAGE[400],
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Connection
+            </span>
+            <Select
+              value={activeConnectionId}
+              onChange={onActiveConnectionChange}
+              disabled={busy}
+              minWidth={210}
+              options={availableConnections.map((conn) => ({
+                value: conn.id,
+                label: `${conn.name} (${conn.id})`,
+              }))}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Chat messages */}
       <div
         ref={chatRef}
@@ -567,64 +649,77 @@ function ConversationPanel({
         }}
       >
         <div style={{ maxWidth: 720, margin: "0 auto" }}>
-          {timeline.length === 0 && !busy && (
+          {visibleTimeline.length === 0 && !busy && (
             <AgentTextBubble text="Welcome to this exploration. I have access to your connected databases. What would you like to explore? Try asking me to show the schema, run a query, or view database stats." />
           )}
 
-          {timeline.map((entry, i) => {
-            // A bot entry is agent_text or tool
-            const isBotEntry = entry.kind === "agent_text" || entry.kind === "tool";
-            const prevEntry = i > 0 ? timeline[i - 1] : null;
-            const prevIsBot = prevEntry != null && (prevEntry.kind === "agent_text" || prevEntry.kind === "tool");
-            const nextEntry = i < timeline.length - 1 ? timeline[i + 1] : null;
-            const nextIsBot = nextEntry != null && (nextEntry.kind === "agent_text" || nextEntry.kind === "tool");
+          <Render
+            glove={glove}
+            strategy="interleaved"
+            renderInput={() => null}
+            renderMessage={({ entry, index }) => {
+              const isCompactionEntry = isCompactionTimelineEntry(entry);
+              if (isCompactionEntry) {
+                const { spacing } = getBotEntryLayout(visibleTimeline, index);
+                return <CompactionNotice spacing={spacing} />;
+              }
 
-            // Show avatar only on the first message in a consecutive bot group
-            const showAvatar = isBotEntry && !prevIsBot;
-            // Use tighter spacing between consecutive bot messages, full spacing at group end
-            const spacing = isBotEntry && nextIsBot ? 8 : 24;
+              if (entry.kind === "user") {
+                return <UserBubble text={entry.text} />;
+              }
 
-            if (entry.kind === "user") {
-              return <UserBubble key={`user-${i}`} text={entry.text} />;
-            }
-            if (entry.kind === "agent_text") {
+              const { showAvatar, spacing } = getBotEntryLayout(visibleTimeline, index);
               return (
                 <AgentTextBubble
-                  key={`agent-${i}`}
                   text={entry.text}
                   showAvatar={showAvatar}
                   spacing={spacing}
                 />
               );
-            }
-            if (entry.kind === "tool") {
-              const activeSlot = toolSlotMap.get(entry.id) ?? null;
-              const historyResult =
-                entry.status !== "running" ? renderToolResult(entry) : null;
-              return (
-                <ToolEntry
-                  key={`tool-${entry.id}-${i}`}
-                  entry={entry}
-                  renderedSlot={activeSlot ?? historyResult}
-                  showAvatar={showAvatar}
-                  spacing={spacing}
-                />
-              );
-            }
-            return null;
-          })}
+            }}
+            renderToolStatus={({ entry, index, hasSlot }) => {
+              const { showAvatar, spacing } = getBotEntryLayout(visibleTimeline, index);
 
-          {streamingText && (
-            <AgentTextBubble
-              text={streamingText}
-              showAvatar={
-                // Show avatar if the last timeline entry is not a bot entry
-                timeline.length === 0 ||
-                timeline[timeline.length - 1].kind === "user"
+              if (entry.status === "running" && !hasSlot) {
+                return (
+                  <ToolRunningStatus
+                    toolName={entry.name}
+                    showAvatar={showAvatar}
+                    spacing={spacing}
+                  />
+                );
               }
-              spacing={24}
-            />
-          )}
+
+              const fallbackOutput =
+                entry.output && !/^\s*\[object Object\]\s*$/.test(entry.output)
+                  ? entry.output
+                  : null;
+
+              if (
+                entry.status !== "running" &&
+                !hasSlot &&
+                entry.renderData === undefined &&
+                fallbackOutput
+              ) {
+                return (
+                  <AgentTextBubble
+                    text={fallbackOutput}
+                    showAvatar={showAvatar}
+                    spacing={spacing}
+                  />
+                );
+              }
+
+              return null;
+            }}
+            renderStreaming={({ text }) => (
+              <AgentTextBubble
+                text={text}
+                showAvatar={!isBotTimelineEntry(visibleTimeline[visibleTimeline.length - 1])}
+                spacing={24}
+              />
+            )}
+          />
 
           {busy &&
             !streamingText &&
@@ -633,20 +728,14 @@ function ConversationPanel({
             ) && (
               <TypingIndicator
                 showAvatar={
-                  timeline.length === 0 ||
-                  timeline[timeline.length - 1].kind === "user"
+                  visibleTimeline.length === 0 ||
+                  (!isCompactionTimelineEntry(visibleTimeline[visibleTimeline.length - 1]) &&
+                    visibleTimeline[visibleTimeline.length - 1].kind === "user")
                 }
               />
             )}
         </div>
       </div>
-
-      {/* Unclaimed slots (pushAndWait dialogs not yet matched to timeline) */}
-      {unclaimedSlots.map((slot) => {
-        const rendered = renderSlot(slot);
-        if (!rendered) return null;
-        return <div key={slot.id}>{rendered}</div>;
-      })}
 
       {/* Input bar */}
       <div
@@ -685,28 +774,45 @@ function ConversationPanel({
               }
             />
             <button
-              onClick={handleSend}
-              disabled={busy}
+              onClick={busy ? handleAbort : handleSend}
+              disabled={!busy && !input.trim()}
+              title={busy ? "Abort current request" : "Send message"}
               style={{
                 padding: "12px 20px",
-                background: busy ? SAGE[600] : SAGE[900],
-                color: CREAM[50],
+                background: busy ? SEMANTIC.error : SAGE[900],
+                color: SAGE[50],
                 border: "none",
-                cursor: busy ? "not-allowed" : "pointer",
+                cursor: (!busy && !input.trim()) ? "not-allowed" : "pointer",
                 transition: "background 0.2s ease",
                 display: "flex",
                 alignItems: "center",
+                justifyContent: "center",
+                minWidth: 52,
+                opacity: (!busy && !input.trim()) ? 0.7 : 1,
               }}
               onMouseEnter={(e) => {
-                if (!busy)
+                if (!busy && input.trim())
                   e.currentTarget.style.background = SAGE[700];
+                if (busy) e.currentTarget.style.background = SEMANTIC.error;
               }}
               onMouseLeave={(e) => {
                 if (!busy)
                   e.currentTarget.style.background = SAGE[900];
+                if (busy) e.currentTarget.style.background = SEMANTIC.error;
               }}
             >
-              <Send size={16} />
+              {busy ? (
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    background: SAGE[50],
+                    display: "block",
+                  }}
+                />
+              ) : (
+                <Send size={16} />
+              )}
             </button>
           </div>
           {inputError && (
@@ -715,7 +821,7 @@ function ConversationPanel({
                 marginTop: 8,
                 fontFamily: FONTS.body,
                 fontSize: 12,
-                color: "#b94a48",
+                color: SEMANTIC.error,
               }}
             >
               {inputError}
@@ -795,12 +901,25 @@ export function Explorations({
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [connectionNotes, setConnectionNotes] = useState<ConnectionNote[]>([]);
+  const [activeConnectionByExploration, setActiveConnectionByExploration] = useState<Record<string, string>>({});
+  const [activeConnectionMapHydrated, setActiveConnectionMapHydrated] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const activeConnectionStorageKey = `${ACTIVE_CONNECTION_STORAGE_PREFIX}:${currentProjectId}`;
 
   // Load explorations and connections immediately, auto-connect in background
   useEffect(() => {
+    // Reset state for the new project
+    setSelectedExp("");
+    setExplorations([]);
+    setConnections([]);
+    setSavedQueries([]);
+    setConnectionNotes([]);
+    setActiveConnectionByExploration({});
+    setActiveConnectionMapHydrated(false);
+    setLoading(true);
+
     const load = async () => {
       try {
         const [exps, conns, queries, notes] = await Promise.all([
@@ -809,11 +928,13 @@ export function Explorations({
           listSavedQueries(),
           listConnectionNotes(),
         ]);
+        // Scope saved queries to this project's connections
+        const connIds = new Set(conns.map((c) => c.id));
         setExplorations(exps);
         setConnections(conns);
-        setSavedQueries(queries);
+        setSavedQueries(queries.filter((q) => connIds.has(q.connection_id)));
         setConnectionNotes(notes);
-        if (exps.length > 0 && !selectedExp) {
+        if (exps.length > 0) {
           setSelectedExp(exps[0].id);
         }
       } catch {
@@ -835,6 +956,126 @@ export function Explorations({
         .catch(() => {});
     }
   }, [currentProjectId]);
+
+  const refreshConnectionNotes = useCallback(async () => {
+    try {
+      const notes = await listConnectionNotes();
+      setConnectionNotes(notes);
+    } catch {
+      // ignore note refresh errors
+    }
+  }, []);
+
+  useEffect(() => {
+    const onNotesUpdated = () => {
+      void refreshConnectionNotes();
+    };
+    window.addEventListener("arc:notes-updated", onNotesUpdated);
+    return () => {
+      window.removeEventListener("arc:notes-updated", onNotesUpdated);
+    };
+  }, [refreshConnectionNotes]);
+
+  useEffect(() => {
+    setActiveConnectionMapHydrated(false);
+    if (typeof window === "undefined") {
+      setActiveConnectionByExploration({});
+      setActiveConnectionMapHydrated(true);
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(activeConnectionStorageKey);
+      if (!raw) {
+        setActiveConnectionByExploration({});
+      } else {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setActiveConnectionByExploration({});
+        } else {
+          const hydrated: Record<string, string> = {};
+          for (const [expId, connId] of Object.entries(parsed)) {
+            if (typeof connId === "string" && connId.length > 0) {
+              hydrated[expId] = connId;
+            }
+          }
+          setActiveConnectionByExploration(hydrated);
+        }
+      }
+    } catch {
+      setActiveConnectionByExploration({});
+    } finally {
+      setActiveConnectionMapHydrated(true);
+    }
+  }, [activeConnectionStorageKey]);
+
+  useEffect(() => {
+    if (!activeConnectionMapHydrated || typeof window === "undefined") return;
+    try {
+      if (Object.keys(activeConnectionByExploration).length === 0) {
+        window.localStorage.removeItem(activeConnectionStorageKey);
+      } else {
+        window.localStorage.setItem(
+          activeConnectionStorageKey,
+          JSON.stringify(activeConnectionByExploration)
+        );
+      }
+    } catch {
+      // ignore local storage write errors
+    }
+  }, [activeConnectionStorageKey, activeConnectionByExploration, activeConnectionMapHydrated]);
+
+  useEffect(() => {
+    if (loading || !activeConnectionMapHydrated) return;
+    const validConnectionIds = new Set(connections.map((c) => c.id));
+    setActiveConnectionByExploration((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [expId, connId] of Object.entries(prev)) {
+        if (validConnectionIds.has(connId)) {
+          next[expId] = connId;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [connections, loading, activeConnectionMapHydrated]);
+
+  useEffect(() => {
+    if (loading || !activeConnectionMapHydrated) return;
+    const validExplorationIds = new Set(explorations.map((e) => e.id));
+    setActiveConnectionByExploration((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [expId, connId] of Object.entries(prev)) {
+        if (validExplorationIds.has(expId)) {
+          next[expId] = connId;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [explorations, loading, activeConnectionMapHydrated]);
+
+  const selectedExplorationActiveConnectionId = useMemo(() => {
+    if (!selectedExp) return "";
+    const preferred = activeConnectionByExploration[selectedExp];
+    if (preferred && connections.some((c) => c.id === preferred)) {
+      return preferred;
+    }
+    const connected = connections.find((c) => c.connected);
+    return connected?.id || connections[0]?.id || "";
+  }, [selectedExp, activeConnectionByExploration, connections]);
+
+  const handleActiveConnectionChange = useCallback((connectionId: string) => {
+    if (!selectedExp) return;
+    setActiveConnectionByExploration((prev) => {
+      if (prev[selectedExp] === connectionId) return prev;
+      return { ...prev, [selectedExp]: connectionId };
+    });
+  }, [selectedExp]);
 
   // Build context-aware client whenever connections change
   const arcClient = useMemo(() => {
@@ -861,11 +1102,12 @@ export function Explorations({
         database: c.database,
         connected: c.connected,
       })),
+      activeConnectionId: selectedExplorationActiveConnectionId,
       connectionNotes: connectionNotes.filter((n) => connectionIds.has(n.connection_id)),
       savedQueries: contextualSavedQueries,
     };
     return createArcClient(context);
-  }, [projectName, projectDescription, connections, connectionNotes, savedQueries]);
+  }, [projectName, projectDescription, connections, selectedExplorationActiveConnectionId, connectionNotes, savedQueries]);
 
   const handleNewExploration = useCallback(async () => {
     try {
@@ -1199,6 +1441,9 @@ export function Explorations({
             key={selectedExp}
             explorationId={selectedExp}
             savedQueries={savedQueries}
+            connections={connections}
+            activeConnectionId={selectedExplorationActiveConnectionId}
+            onActiveConnectionChange={handleActiveConnectionChange}
           />
         </GloveProvider>
       )}

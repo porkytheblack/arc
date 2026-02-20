@@ -2,6 +2,7 @@ import { useState } from "react";
 import { z } from "zod";
 import { defineTool } from "glove-react";
 import { Button } from "../../components/Button";
+import { Select } from "../../components/Select";
 import { SAGE, CREAM, FONTS } from "../theme";
 import { Plus, X } from "lucide-react";
 import { parseRenderData } from "./render-data";
@@ -46,7 +47,7 @@ function FilterBuilderUI({ tableName, columns, onApply, onCancel }: FilterBuilde
 
   const hideValue = (op: string) => op === "IS NULL" || op === "IS NOT NULL";
 
-  const selectStyle: React.CSSProperties = {
+  const inputStyle: React.CSSProperties = {
     padding: "8px 10px",
     border: `1px solid ${SAGE[200]}`,
     background: CREAM[50],
@@ -108,35 +109,27 @@ function FilterBuilderUI({ tableName, columns, onApply, onCancel }: FilterBuilde
               </div>
             )}
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <select
+              <Select
                 value={filter.column}
-                onChange={(e) => updateFilter(index, "column", e.target.value)}
-                style={{ ...selectStyle, flex: 2 }}
-              >
-                {columns.map((col) => (
-                  <option key={col.name} value={col.name}>
-                    {col.name}
-                  </option>
-                ))}
-              </select>
-              <select
+                onChange={(value) => updateFilter(index, "column", value)}
+                options={columns.map((col) => ({ value: col.name, label: col.name }))}
+                minWidth={0}
+                style={{ flex: 2 }}
+              />
+              <Select
                 value={filter.operator}
-                onChange={(e) => updateFilter(index, "operator", e.target.value)}
-                style={{ ...selectStyle, flex: 1 }}
-              >
-                {OPERATORS.map((op) => (
-                  <option key={op} value={op}>
-                    {op}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => updateFilter(index, "operator", value)}
+                options={OPERATORS.map((op) => ({ value: op, label: op }))}
+                minWidth={0}
+                style={{ flex: 1 }}
+              />
               {!hideValue(filter.operator) && (
                 <input
                   value={filter.value}
                   onChange={(e) => updateFilter(index, "value", e.target.value)}
                   placeholder="Value"
                   style={{
-                    ...selectStyle,
+                    ...inputStyle,
                     flex: 2,
                   }}
                 />

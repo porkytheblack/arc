@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::commands::{
     AppError, ConnectionNote, DatabaseConnection, DatabaseStats, Exploration, ExplorationMessage,
-    Project, SavedQuery, TableLink,
+    Project, SavedChart, SavedQuery, TableLink,
 };
 
 pub struct Database {
@@ -71,6 +71,14 @@ impl Database {
                 FOREIGN KEY (exploration_id) REFERENCES explorations(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS exploration_store_state (
+                exploration_id TEXT PRIMARY KEY,
+                token_count INTEGER NOT NULL DEFAULT 0,
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (exploration_id) REFERENCES explorations(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS saved_queries (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -78,6 +86,20 @@ impl Database {
                 sql_text TEXT NOT NULL,
                 connection_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS saved_charts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                chart_type TEXT NOT NULL,
+                x_key TEXT NOT NULL,
+                y_key TEXT NOT NULL,
+                connection_id TEXT,
+                sql_text TEXT,
+                data_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS connection_notes (
@@ -588,6 +610,89 @@ impl Database {
         })
     }
 
+    pub fn get_exploration_token_count(&self, exploration_id: &str) -> Result<u64, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT token_count FROM exploration_store_state WHERE exploration_id = ?1",
+            params![exploration_id],
+            |row| row.get::<_, i64>(0),
+        );
+
+        match result {
+            Ok(v) => Ok(v.max(0) as u64),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(AppError::DatabaseError(e.to_string())),
+        }
+    }
+
+    pub fn add_exploration_tokens(&self, exploration_id: &str, count: i64) -> Result<(), AppError> {
+        let conn = self.conn.lock().unwrap();
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO exploration_store_state (exploration_id, token_count, turn_count, updated_at)
+             VALUES (?1, ?2, 0, ?3)
+             ON CONFLICT(exploration_id) DO UPDATE SET
+               token_count = MAX(0, exploration_store_state.token_count + excluded.token_count),
+               updated_at = excluded.updated_at",
+            params![exploration_id, count, &updated_at],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_exploration_turn_count(&self, exploration_id: &str) -> Result<u64, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT turn_count FROM exploration_store_state WHERE exploration_id = ?1",
+            params![exploration_id],
+            |row| row.get::<_, i64>(0),
+        );
+
+        match result {
+            Ok(v) => Ok(v.max(0) as u64),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(AppError::DatabaseError(e.to_string())),
+        }
+    }
+
+    pub fn increment_exploration_turn(&self, exploration_id: &str) -> Result<(), AppError> {
+        let conn = self.conn.lock().unwrap();
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO exploration_store_state (exploration_id, token_count, turn_count, updated_at)
+             VALUES (?1, 0, 1, ?2)
+             ON CONFLICT(exploration_id) DO UPDATE SET
+               turn_count = exploration_store_state.turn_count + 1,
+               updated_at = excluded.updated_at",
+            params![exploration_id, &updated_at],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn reset_exploration_history(&self, exploration_id: &str) -> Result<(), AppError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO exploration_store_state (exploration_id, token_count, turn_count, updated_at)
+             VALUES (?1, 0, 0, ?2)
+             ON CONFLICT(exploration_id) DO UPDATE SET
+               token_count = 0,
+               turn_count = 0,
+               updated_at = excluded.updated_at",
+            params![exploration_id, &updated_at],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
     // --- Saved Queries ---
 
     pub fn list_saved_queries(&self) -> Result<Vec<SavedQuery>, AppError> {
@@ -654,6 +759,105 @@ impl Database {
 
         if affected == 0 {
             return Err(AppError::NotFound(format!("Query {id} not found")));
+        }
+        Ok(())
+    }
+
+    // --- Saved Charts ---
+
+    pub fn list_saved_charts(&self) -> Result<Vec<SavedChart>, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, chart_type, x_key, y_key, connection_id, sql_text, data_json, created_at
+                 FROM saved_charts
+                 ORDER BY created_at DESC",
+            )
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        let results = stmt
+            .query_map([], |row| {
+                let data_json: String = row.get(8)?;
+                let data = serde_json::from_str::<serde_json::Value>(&data_json)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+
+                Ok(SavedChart {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    chart_type: row.get(3)?,
+                    x_key: row.get(4)?,
+                    y_key: row.get(5)?,
+                    connection_id: row.get(6)?,
+                    sql: row.get(7)?,
+                    data,
+                    created_at: row.get(9)?,
+                })
+            })
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(results)
+    }
+
+    pub fn save_saved_chart(
+        &self,
+        name: &str,
+        description: &str,
+        chart_type: &str,
+        x_key: &str,
+        y_key: &str,
+        connection_id: Option<&str>,
+        sql: Option<&str>,
+        data: &serde_json::Value,
+    ) -> Result<SavedChart, AppError> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let data_json = serde_json::to_string(data)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            "INSERT INTO saved_charts (id, name, description, chart_type, x_key, y_key, connection_id, sql_text, data_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                &id,
+                name,
+                description,
+                chart_type,
+                x_key,
+                y_key,
+                connection_id,
+                sql,
+                &data_json,
+                &created_at
+            ],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        Ok(SavedChart {
+            id,
+            name: name.to_string(),
+            description: description.to_string(),
+            chart_type: chart_type.to_string(),
+            x_key: x_key.to_string(),
+            y_key: y_key.to_string(),
+            connection_id: connection_id.map(|s| s.to_string()),
+            sql: sql.map(|s| s.to_string()),
+            data: data.clone(),
+            created_at,
+        })
+    }
+
+    pub fn delete_saved_chart(&self, id: &str) -> Result<(), AppError> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute("DELETE FROM saved_charts WHERE id = ?1", params![id])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        if affected == 0 {
+            return Err(AppError::NotFound(format!("Chart {id} not found")));
         }
         Ok(())
     }

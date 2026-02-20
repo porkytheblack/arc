@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
-import { SAGE, CREAM, FONTS } from "../lib/theme";
+import { SAGE, CREAM, FONTS, SEMANTIC } from "../lib/theme";
 import { save } from "@tauri-apps/plugin-dialog";
+import { downloadDir, join } from "@tauri-apps/api/path";
 import { writeFile } from "../lib/commands";
 import { Download } from "lucide-react";
 
@@ -43,37 +44,72 @@ export function DataTable({ columns, rows, pageSize = 25, style }: DataTableProp
 
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const pagedRows = sortedRows.slice(page * pageSize, (page + 1) * pageSize);
-  const [exporting, setExporting] = useState(false);
+  const [exportingMode, setExportingMode] = useState<"downloads" | "save-as" | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
-  const handleExportCsv = useCallback(async () => {
-    if (exporting || columns.length === 0) return;
-    setExporting(true);
+  const buildCsvFileName = () => {
+    const now = new Date();
+    const pad = (v: number) => String(v).padStart(2, "0");
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    return `arc-export-${stamp}.csv`;
+  };
+
+  const buildCsv = useCallback(() => {
+    const escapeCsvField = (val: unknown): string => {
+      if (val === null || val === undefined) return "";
+      const str = String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+    const header = columns.map(escapeCsvField).join(",");
+    const body = rows.map((row) => row.map(escapeCsvField).join(",")).join("\n");
+    return header + "\n" + body;
+  }, [columns, rows]);
+
+  const handleExportToDownloads = useCallback(async () => {
+    if (exportingMode || columns.length === 0) return;
+    setExportingMode("downloads");
+    setExportNotice(null);
     try {
+      const downloadsPath = await downloadDir();
+      const fileName = buildCsvFileName();
+      const filePath = await join(downloadsPath, fileName);
+      await writeFile(filePath, buildCsv());
+      setExportNotice(`Exported to Downloads as ${fileName}`);
+    } catch {
+      setExportNotice("Failed to export CSV to Downloads");
+    } finally {
+      setExportingMode(null);
+    }
+  }, [columns.length, exportingMode, buildCsv]);
+
+  const handleSaveAsCsv = useCallback(async () => {
+    if (exportingMode || columns.length === 0) return;
+    setExportingMode("save-as");
+    setExportNotice(null);
+    try {
+      let defaultPath = "export.csv";
+      try {
+        defaultPath = await join(await downloadDir(), "export.csv");
+      } catch {
+        // Fallback to plain filename if Downloads path resolution fails.
+      }
+
       const filePath = await save({
-        defaultPath: "export.csv",
+        defaultPath,
         filters: [{ name: "CSV", extensions: ["csv"] }],
       });
-      if (!filePath) {
-        setExporting(false);
-        return;
-      }
-      const escapeCsvField = (val: unknown): string => {
-        if (val === null || val === undefined) return "";
-        const str = String(val);
-        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
-      const header = columns.map(escapeCsvField).join(",");
-      const body = rows.map((row) => row.map(escapeCsvField).join(",")).join("\n");
-      const csv = header + "\n" + body;
-      await writeFile(filePath, csv);
+      if (!filePath) return;
+      await writeFile(filePath, buildCsv());
+      setExportNotice("CSV exported");
     } catch {
-      // Export cancelled or failed silently
+      setExportNotice("Failed to export CSV");
+    } finally {
+      setExportingMode(null);
     }
-    setExporting(false);
-  }, [columns, rows, exporting]);
+  }, [columns.length, exportingMode, buildCsv]);
 
   if (columns.length === 0) {
     return (
@@ -95,27 +131,61 @@ export function DataTable({ columns, rows, pageSize = 25, style }: DataTableProp
 
   return (
     <div style={{ ...style }}>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
-        <button
-          onClick={handleExportCsv}
-          disabled={exporting}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "4px 10px",
-            border: `1px solid ${SAGE[200]}`,
-            background: CREAM[50],
-            fontFamily: FONTS.mono,
-            fontSize: 11,
-            color: exporting ? SAGE[300] : SAGE[600],
-            cursor: exporting ? "default" : "pointer",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Download size={11} />
-          {exporting ? "Exporting..." : "Export CSV"}
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div style={{ minHeight: 16 }}>
+          {exportNotice && (
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 10,
+                color: SAGE[500],
+              }}
+            >
+              {exportNotice}
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={handleExportToDownloads}
+            disabled={Boolean(exportingMode)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 10px",
+              border: `1px solid ${SAGE[300]}`,
+              background: SAGE[50],
+              fontFamily: FONTS.mono,
+              fontSize: 11,
+              color: exportingMode ? SAGE[300] : SAGE[700],
+              cursor: exportingMode ? "default" : "pointer",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <Download size={11} />
+            {exportingMode === "downloads" ? "Exporting..." : "Export CSV"}
+          </button>
+          <button
+            onClick={handleSaveAsCsv}
+            disabled={Boolean(exportingMode)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 10px",
+              border: `1px solid ${SAGE[200]}`,
+              background: CREAM[50],
+              fontFamily: FONTS.mono,
+              fontSize: 11,
+              color: exportingMode ? SAGE[300] : SAGE[600],
+              cursor: exportingMode ? "default" : "pointer",
+              transition: "all 0.15s ease",
+            }}
+          >
+            Save As
+          </button>
+        </div>
       </div>
       <div
         style={{
@@ -212,7 +282,7 @@ export function DataTable({ columns, rows, pageSize = 25, style }: DataTableProp
                       ) : typeof cell === "boolean" ? (
                         <span
                           style={{
-                            color: cell ? "#4ade80" : SAGE[300],
+                            color: cell ? SEMANTIC.success : SAGE[300],
                             fontSize: 11,
                             textTransform: "uppercase",
                             letterSpacing: "0.05em",

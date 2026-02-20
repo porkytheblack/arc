@@ -60,6 +60,19 @@ export interface SavedQuery {
   created_at: string;
 }
 
+export interface SavedChart {
+  id: string;
+  name: string;
+  description: string;
+  chart_type: "bar" | "line" | "area" | "pie";
+  x_key: string;
+  y_key: string;
+  connection_id: string | null;
+  sql: string | null;
+  data: Record<string, unknown>[];
+  created_at: string;
+}
+
 export interface ConnectionNote {
   connection_id: string;
   note: string;
@@ -294,6 +307,38 @@ export async function deleteSavedQuery(id: string): Promise<void> {
   return invoke<void>("delete_saved_query", { id });
 }
 
+// --- Saved Charts ---
+
+export async function listSavedCharts(): Promise<SavedChart[]> {
+  return invoke<SavedChart[]>("list_saved_charts");
+}
+
+export async function saveSavedChart(params: {
+  name: string;
+  description: string;
+  chartType: "bar" | "line" | "area" | "pie";
+  xKey: string;
+  yKey: string;
+  connectionId?: string | null;
+  sql?: string | null;
+  data: Record<string, unknown>[];
+}): Promise<SavedChart> {
+  return invoke<SavedChart>("save_saved_chart", {
+    name: params.name,
+    description: params.description,
+    chartType: params.chartType,
+    xKey: params.xKey,
+    yKey: params.yKey,
+    connectionId: params.connectionId ?? null,
+    sql: params.sql ?? null,
+    data: params.data,
+  });
+}
+
+export async function deleteSavedChart(id: string): Promise<void> {
+  return invoke<void>("delete_saved_chart", { id });
+}
+
 // --- Connection Notes ---
 
 export async function listConnectionNotes(): Promise<ConnectionNote[]> {
@@ -329,6 +374,18 @@ export async function importCsv(
     csvContent,
     tableName,
     connectionId: connectionId ?? null,
+  });
+}
+
+export async function createCsvConnection(
+  csvContent: string,
+  fileName: string,
+  projectId: string
+): Promise<DatabaseConnection> {
+  return invoke<DatabaseConnection>("create_csv_connection", {
+    csvContent,
+    fileName,
+    projectId,
   });
 }
 
@@ -414,6 +471,34 @@ export async function addMessage(
     content,
     metadata: metadata ?? null,
   });
+}
+
+export async function getMessageTokenCount(explorationId: string): Promise<number> {
+  return invoke<number>("get_message_token_count", { explorationId });
+}
+
+export async function addMessageTokens(
+  explorationId: string,
+  count: number
+): Promise<void> {
+  return invoke<void>("add_message_tokens", { explorationId, count });
+}
+
+export async function getMessageTurnCount(explorationId: string): Promise<number> {
+  return invoke<number>("get_message_turn_count", { explorationId });
+}
+
+export async function incrementMessageTurn(explorationId: string): Promise<void> {
+  return invoke<void>("increment_message_turn", { explorationId });
+}
+
+export async function resetMessageCounters(explorationId: string): Promise<void> {
+  return invoke<void>("reset_message_history", { explorationId });
+}
+
+// Backward-compatible alias
+export async function resetMessageHistory(explorationId: string): Promise<void> {
+  return resetMessageCounters(explorationId);
 }
 
 // --- Settings ---

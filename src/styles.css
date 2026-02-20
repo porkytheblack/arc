@@ -1,3 +1,25 @@
+/* Default theme vars (Sage light) — prevents FOUC before JS loads */
+:root {
+  --primary-50: #f0f4f0;
+  --primary-100: #dce5dc;
+  --primary-200: #b8cab8;
+  --primary-300: #8fa88f;
+  --primary-400: #6b8a6b;
+  --primary-500: #4a6b4a;
+  --primary-600: #3d5a3d;
+  --primary-700: #2d422d;
+  --primary-800: #1e2e1e;
+  --primary-900: #111a11;
+  --primary-950: #0a100a;
+  --bg-50: #fefdfb;
+  --bg-100: #faf7f2;
+  --bg-200: #f2ebe0;
+  --bg-300: #e8dcc8;
+  --semantic-success: #4ade80;
+  --semantic-warning: #d4a853;
+  --semantic-error: #c45c5c;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -12,8 +34,8 @@ html, body, #root {
 
 body {
   font-family: 'DM Sans', sans-serif;
-  background: #faf7f2;
-  color: #111a11;
+  background: var(--bg-100);
+  color: var(--primary-900);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -28,11 +50,20 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #b8cab8;
+  background: var(--primary-200);
 }
 
 input::placeholder {
-  color: #8fa88f;
+  color: var(--primary-300);
+}
+
+/* Background gridlines — applied directly to body so they show through transparent areas */
+[data-gridlines="true"] body {
+  background-image:
+    linear-gradient(var(--primary-200) 1px, transparent 1px),
+    linear-gradient(90deg, var(--primary-200) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-color: var(--bg-100);
 }
 
 @keyframes slideUp {

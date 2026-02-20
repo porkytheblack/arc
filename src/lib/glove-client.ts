@@ -2,7 +2,16 @@ import { GloveClient, createRemoteStore } from "glove-react";
 import type { RemoteStoreActions } from "glove-react";
 import type { ModelAdapter, Message } from "glove-core/core";
 import { createBrowserAdapter, providers } from "./adapters";
-import { getSetting, listMessages, addMessage } from "./commands";
+import {
+  getSetting,
+  listMessages,
+  addMessage,
+  getMessageTokenCount,
+  addMessageTokens,
+  getMessageTurnCount,
+  incrementMessageTurn,
+  resetMessageCounters,
+} from "./commands";
 import { arcTools } from "./tools";
 
 const ARC_BASE_PROMPT = `You are Arc, a conversational database assistant built on Glove. You help users explore, query, and understand their databases through natural conversation.
@@ -27,6 +36,7 @@ Available capabilities:
 - Show success notifications (show_success)
 - View table metadata including indexes and foreign keys (get_table_metadata)
 - Show query execution plans (explain_query)
+- Merge/interpolate results from different connections after querying (merge_query_results)
 
 Guidelines:
 - Always use tools to show data rather than describing it in text
@@ -38,9 +48,20 @@ Guidelines:
 - When multiple tables match a query, use disambiguate to ask which one
 - For scalar results (COUNT, MAX, MIN, AVG), prefer show_compact_result
 - If execute_query returns an unknown table/column error, refresh schema/metadata and retry with corrected SQL
+- For multi-connection requests, try active/default connection first; if unresolved, query other relevant connections and merge results with merge_query_results
+- Cross-connection merge workflow:
+  1) Run execute_query on the active/default connection first.
+  2) If that cannot fully answer the request (missing tables/columns/data), run execute_query on additional relevant connections.
+  3) Use the structured object rows from execute_query output as merge inputs; include connectionId/label for each side.
+  4) Call merge_query_results with explicit leftKey, rightKey, mergeType (inner/left/right/full), and clear prefixes.
+  5) Check merge stats and row counts; if matches are near zero, adjust join keys or ask the user to clarify key mapping.
+  6) After merging, continue analysis/visualization from merged output (show_chart or show_compact_result when requested).
+- Never invent join keys or schemas; derive keys from schema/tool outputs or ask for clarification
 - Keep text responses short \u2014 1-2 sentences between tool calls
-- Use the default connection "conn-1" unless the user specifies otherwise
+- Use the active/default connection in context unless the user explicitly requests another one
 - If a tool renders UI output, do not repeat the full table/card payload in text`;
+
+const COMPACTION_MESSAGE_PREFIX = "[Conversation summary from compaction]";
 
 export interface ProjectContext {
   projectName: string;
@@ -52,6 +73,7 @@ export interface ProjectContext {
     database: string;
     connected: boolean;
   }>;
+  activeConnectionId?: string;
   connectionNotes?: Array<{
     connection_id: string;
     note: string;
@@ -70,6 +92,13 @@ export interface ProjectContext {
 
 export function buildSystemPrompt(context?: ProjectContext): string {
   if (!context) return ARC_BASE_PROMPT;
+
+  const preferredConnection = context.activeConnectionId
+    ? context.connections.find((c) => c.id === context.activeConnectionId)
+    : undefined;
+  const fallbackConnection =
+    context.connections.find((c) => c.connected) || context.connections[0];
+  const defaultConnection = preferredConnection || fallbackConnection;
 
   const connLines = context.connections.map((c) =>
     `  - ${c.name} (${c.db_type}, id: "${c.id}", database: "${c.database}", ${c.connected ? "connected" : "disconnected"})`
@@ -110,7 +139,7 @@ ${noteLines.length > 0 ? noteLines.join("\n") : "  (none)"}
 ${queryLines.length > 0 ? queryLines.join("\n") : "  (none)"}
 
 When a user types a slash reference like "/query-name key=value", treat it as a saved-query invocation and call execute_saved_query with those params.
-${context.connections.some((c) => c.connected) ? `\nThe default connection to use is "${context.connections.find((c) => c.connected)?.id || "conn-1"}".` : "\nNo databases are currently connected. Suggest the user connect one first."}`;
+${defaultConnection ? `\nThe active/default connection to use is "${defaultConnection.id}" (${defaultConnection.name}).` : "\nNo databases are currently connected. Suggest the user connect one first."}`;
 }
 
 // ─── Persistent store via Tauri DB ───────────────────────────────────────────
@@ -119,14 +148,26 @@ const storeActions: RemoteStoreActions = {
   async getMessages(sessionId: string): Promise<Message[]> {
     const rows = await listMessages(sessionId);
     return rows.map((row) => {
-      const meta = row.metadata ? JSON.parse(row.metadata) : {};
-      return {
+      let meta: Record<string, unknown> = {};
+      if (row.metadata) {
+        try {
+          meta = JSON.parse(row.metadata) as Record<string, unknown>;
+        } catch {
+          meta = {};
+        }
+      }
+      const isCompaction =
+        meta.is_compaction === true ||
+        row.content.trimStart().startsWith(COMPACTION_MESSAGE_PREFIX);
+      const message: Message = {
         sender: row.role as "user" | "agent",
         text: row.content,
-        ...(meta.tool_calls && { tool_calls: meta.tool_calls }),
-        ...(meta.tool_results && { tool_results: meta.tool_results }),
-        ...(meta.content && { content: meta.content }),
       };
+      if (Array.isArray(meta.tool_calls)) message.tool_calls = meta.tool_calls as Message["tool_calls"];
+      if (Array.isArray(meta.tool_results)) message.tool_results = meta.tool_results as Message["tool_results"];
+      if (Array.isArray(meta.content)) message.content = meta.content as Message["content"];
+      if (isCompaction) message.is_compaction = true;
+      return message;
     });
   },
 
@@ -137,6 +178,7 @@ const storeActions: RemoteStoreActions = {
       if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls;
       if (msg.tool_results?.length) metadata.tool_results = msg.tool_results;
       if (msg.content?.length) metadata.content = msg.content;
+      if (msg.is_compaction) metadata.is_compaction = true;
 
       const metaStr = Object.keys(metadata).length > 0
         ? JSON.stringify(metadata)
@@ -144,6 +186,26 @@ const storeActions: RemoteStoreActions = {
 
       await addMessage(sessionId, role, msg.text || "", metaStr);
     }
+  },
+
+  async getTokenCount(sessionId: string): Promise<number> {
+    return getMessageTokenCount(sessionId);
+  },
+
+  async addTokens(sessionId: string, count: number): Promise<void> {
+    await addMessageTokens(sessionId, Math.trunc(count));
+  },
+
+  async getTurnCount(sessionId: string): Promise<number> {
+    return getMessageTurnCount(sessionId);
+  },
+
+  async incrementTurn(sessionId: string): Promise<void> {
+    await incrementMessageTurn(sessionId);
+  },
+
+  async resetCounters(sessionId: string): Promise<void> {
+    await resetMessageCounters(sessionId);
   },
 };
 

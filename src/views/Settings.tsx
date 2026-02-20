@@ -3,12 +3,13 @@ import { SAGE, CREAM, FONTS } from "../lib/theme";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { Button } from "../components/Button";
+import { Select } from "../components/Select";
 import { getSetting, setSetting } from "../lib/commands";
 import { providers } from "../lib/adapters";
-import { Eye, EyeOff } from "lucide-react";
+import { useThemeSettings } from "../lib/theme-context";
+import { themes } from "../lib/themes";
+import { Eye, EyeOff, Check } from "lucide-react";
 
-
-type ThemePreference = "light" | "system";
 type RowDisplay = "compact" | "comfortable";
 
 interface SettingsSectionProps {
@@ -142,8 +143,79 @@ const PROVIDERS: Record<string, ProviderConfig> = Object.fromEntries(
   })
 );
 
+function ThemeCard({
+  theme,
+  isSelected,
+  isDark,
+  onClick,
+}: {
+  theme: (typeof themes)[number];
+  isSelected: boolean;
+  isDark: boolean;
+  onClick: () => void;
+}) {
+  const colors = isDark ? theme.dark : theme.light;
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        padding: 12,
+        background: CREAM[50],
+        border: `2px solid ${isSelected ? SAGE[500] : hovered ? SAGE[300] : SAGE[100]}`,
+        cursor: "pointer",
+        transition: "border-color 0.2s ease",
+        position: "relative",
+      }}
+    >
+      {/* Color swatch preview */}
+      <div style={{ display: "flex", height: 32, overflow: "hidden" }}>
+        <div style={{ flex: 1, background: colors.bg[50] }} />
+        <div style={{ flex: 1, background: colors.bg[200] }} />
+        <div style={{ flex: 1, background: colors.primary[500] }} />
+        <div style={{ flex: 1, background: colors.primary[900] }} />
+      </div>
+      <span
+        style={{
+          fontFamily: FONTS.body,
+          fontSize: 12,
+          fontWeight: 500,
+          color: SAGE[800],
+          textAlign: "left",
+        }}
+      >
+        {theme.name}
+      </span>
+      {isSelected && (
+        <div
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            width: 18,
+            height: 18,
+            background: SAGE[500],
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: "50%",
+          }}
+        >
+          <Check size={10} color={CREAM[50]} strokeWidth={3} />
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function Settings() {
-  const [theme, setTheme] = useState<ThemePreference>("light");
+  const { themeId, mode, gridlines, setThemeId, setMode, setGridlines } = useThemeSettings();
+
   const [rowDisplay, setRowDisplay] = useState<RowDisplay>("comfortable");
   const [maxRows, setMaxRows] = useState("100");
   const [defaultHost, setDefaultHost] = useState("localhost");
@@ -229,6 +301,8 @@ export function Settings() {
     setTimeout(() => setAiFeedback(null), 5000);
   };
 
+  const isDarkPreview = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
   return (
     <div style={{ flex: 1, overflow: "auto", padding: 32 }}>
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -262,25 +336,15 @@ export function Settings() {
             <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500], display: "block", marginBottom: 6 }}>
               Provider
             </label>
-            <select
+            <Select
               value={aiProvider}
-              onChange={(e) => handleProviderChange(e.target.value)}
+              onChange={handleProviderChange}
+              options={Object.entries(PROVIDERS).map(([id, cfg]) => ({ value: id, label: cfg.label }))}
+              minWidth={0}
               style={{
                 width: "100%",
-                padding: "10px 12px",
-                border: `1px solid ${SAGE[200]}`,
-                background: CREAM[50],
-                fontFamily: FONTS.body,
-                fontSize: 14,
-                color: SAGE[900],
-                outline: "none",
-                appearance: "none",
               }}
-            >
-              {Object.entries(PROVIDERS).map(([id, cfg]) => (
-                <option key={id} value={id}>{cfg.label}</option>
-              ))}
-            </select>
+            />
           </div>
           <div style={{ padding: "10px 0" }}>
             <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500], display: "block", marginBottom: 6 }}>
@@ -327,25 +391,17 @@ export function Settings() {
             <label style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500], display: "block", marginBottom: 6 }}>
               Model
             </label>
-            <select
+            <Select
               value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
+              onChange={setAiModel}
+              options={(PROVIDERS[aiProvider]?.models || []).map((m) => ({ value: m.value, label: m.label }))}
+              placeholder="No models available"
+              disabled={(PROVIDERS[aiProvider]?.models || []).length === 0}
+              minWidth={0}
               style={{
                 width: "100%",
-                padding: "10px 12px",
-                border: `1px solid ${SAGE[200]}`,
-                background: CREAM[50],
-                fontFamily: FONTS.body,
-                fontSize: 14,
-                color: SAGE[900],
-                outline: "none",
-                appearance: "none",
               }}
-            >
-              {(PROVIDERS[aiProvider]?.models || []).map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            />
           </div>
           <div style={{ display: "flex", gap: 8, padding: "10px 0" }}>
             <Button size="sm" onClick={handleSaveAi} disabled={aiSaving}>
@@ -373,14 +429,41 @@ export function Settings() {
 
         {/* Appearance */}
         <SettingsSection title="Appearance" description="Customize the look and feel of Arc">
+          {/* Theme picker */}
+          <div style={{ marginBottom: 16 }}>
+            <span style={{ fontFamily: FONTS.body, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: SAGE[500], display: "block", marginBottom: 10 }}>
+              Color Theme
+            </span>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+              {themes.map((t) => (
+                <ThemeCard
+                  key={t.id}
+                  theme={t}
+                  isSelected={themeId === t.id}
+                  isDark={isDarkPreview}
+                  onClick={() => setThemeId(t.id)}
+                />
+              ))}
+            </div>
+          </div>
           <ToggleOption
-            label="Theme"
+            label="Mode"
             options={[
               { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
               { value: "system", label: "System" },
             ]}
-            selected={theme}
-            onChange={(v) => setTheme(v as ThemePreference)}
+            selected={mode}
+            onChange={(v) => setMode(v as "light" | "dark" | "system")}
+          />
+          <ToggleOption
+            label="Background gridlines"
+            options={[
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+            selected={gridlines ? "on" : "off"}
+            onChange={(v) => setGridlines(v === "on")}
           />
         </SettingsSection>
 
@@ -429,25 +512,15 @@ export function Settings() {
               >
                 Database Type
               </label>
-              <select
+              <Select
                 value={defaultDb}
-                onChange={(e) => setDefaultDb(e.target.value)}
+                onChange={setDefaultDb}
+                options={["PostgreSQL", "MySQL", "SQLite", "MongoDB"].map((t) => ({ value: t, label: t }))}
+                minWidth={0}
                 style={{
                   width: "100%",
-                  padding: "10px 12px",
-                  border: `1px solid ${SAGE[200]}`,
-                  background: CREAM[50],
-                  fontFamily: FONTS.body,
-                  fontSize: 14,
-                  color: SAGE[900],
-                  outline: "none",
-                  appearance: "none",
                 }}
-              >
-                {["PostgreSQL", "MySQL", "SQLite", "MongoDB"].map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
+              />
             </div>
             <Input label="Default Host" value={defaultHost} onChange={setDefaultHost} placeholder="localhost" />
             <Input label="Default Port" value={defaultPort} onChange={setDefaultPort} placeholder="5432" />

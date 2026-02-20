@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use thiserror::Error;
 
 use crate::adapter::{ConnectParams, ConnectionManager, DatabaseKind};
@@ -112,6 +112,20 @@ pub struct SavedQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedChart {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub chart_type: String,
+    pub x_key: String,
+    pub y_key: String,
+    pub connection_id: Option<String>,
+    pub sql: Option<String>,
+    pub data: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionNote {
     pub connection_id: String,
     pub note: String,
@@ -204,8 +218,186 @@ pub fn add_connection(
 }
 
 #[tauri::command]
-pub fn remove_connection(id: String, db: State<'_, Database>) -> Result<(), AppError> {
+pub fn remove_connection(
+    id: String,
+    app_handle: AppHandle,
+    db: State<'_, Database>,
+    conn_manager: State<'_, ConnectionManager>,
+) -> Result<(), AppError> {
+    // Check if this is a CSV-sourced SQLite DB and clean up the file
+    let connections = db.list_connections()?;
+    if let Some(conn_info) = connections.iter().find(|c| c.id == id) {
+        if conn_info.db_type == "SQLite" {
+            if let Ok(app_dir) = app_handle.path().app_data_dir() {
+                let csv_dir = app_dir.join("csv_databases");
+                let db_path = Path::new(&conn_info.database);
+                if db_path.starts_with(&csv_dir) {
+                    // Disconnect first so the file isn't locked
+                    let _ = conn_manager.disconnect(&id);
+                    let _ = fs::remove_file(db_path);
+                }
+            }
+        }
+    }
     db.remove_connection(&id)
+}
+
+#[tauri::command]
+pub fn create_csv_connection(
+    csv_content: String,
+    file_name: String,
+    project_id: String,
+    app_handle: AppHandle,
+    db: State<'_, Database>,
+    conn_manager: State<'_, ConnectionManager>,
+) -> Result<DatabaseConnection, AppError> {
+    let table_name = file_name
+        .trim_end_matches(".csv")
+        .replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
+
+    // Create csv_databases directory in app data dir
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::DatabaseError(format!("Failed to get app data dir: {e}")))?;
+    let csv_dir = app_dir.join("csv_databases");
+    fs::create_dir_all(&csv_dir)
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create csv_databases dir: {e}")))?;
+
+    // Generate unique SQLite file path
+    let db_file = csv_dir.join(format!("{}.db", uuid::Uuid::new_v4()));
+    let db_path_str = db_file.to_string_lossy().to_string();
+
+    // Create connection record
+    let display_name = file_name.trim_end_matches(".csv").to_string();
+    let conn = db.add_connection(&display_name, "SQLite", "localhost", 0, &db_path_str, "")?;
+
+    // Connect to the new SQLite DB
+    let params = ConnectParams {
+        kind: DatabaseKind::SQLite,
+        host: "localhost".to_string(),
+        port: 0,
+        database: db_path_str.clone(),
+        username: String::new(),
+        password: String::new(),
+        use_ssl: false,
+    };
+    conn_manager.connect(&conn.id, &params)?;
+    db.set_connection_status(&conn.id, true)?;
+
+    // Import CSV data using the same logic as import_csv
+    let mut lines = csv_content.lines();
+    let header_line = lines.next().ok_or_else(|| {
+        AppError::CsvParseError("CSV is empty, no header row found".into())
+    })?;
+
+    let columns: Vec<String> = header_line
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .collect();
+
+    if columns.is_empty() {
+        return Err(AppError::CsvParseError("No columns found in CSV header".into()));
+    }
+
+    let mut rows: Vec<Vec<serde_json::Value>> = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let values: Vec<serde_json::Value> = trimmed
+            .split(',')
+            .map(|s| {
+                let s = s.trim().trim_matches('"');
+                if let Ok(n) = s.parse::<i64>() {
+                    serde_json::Value::from(n)
+                } else if let Ok(f) = s.parse::<f64>() {
+                    serde_json::json!(f)
+                } else if s == "true" {
+                    serde_json::Value::Bool(true)
+                } else if s == "false" {
+                    serde_json::Value::Bool(false)
+                } else {
+                    serde_json::Value::String(s.to_string())
+                }
+            })
+            .collect();
+        rows.push(values);
+    }
+
+    // Create table and insert rows
+    let adapter = conn_manager.get(&conn.id)?;
+
+    let col_defs: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let sample = rows
+                .first()
+                .and_then(|r| r.get(i))
+                .unwrap_or(&serde_json::Value::Null);
+            let type_str = match sample {
+                serde_json::Value::Number(n) => {
+                    if n.is_f64() { "REAL" } else { "INTEGER" }
+                }
+                serde_json::Value::Bool(_) => "BOOLEAN",
+                _ => "TEXT",
+            };
+            format!("\"{}\" {}", name, type_str)
+        })
+        .collect();
+
+    let create_sql = format!(
+        "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
+        table_name,
+        col_defs.join(", ")
+    );
+    adapter.execute_statement(&create_sql)?;
+
+    let col_list = columns
+        .iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    const BATCH_SIZE: usize = 50;
+    for chunk in rows.chunks(BATCH_SIZE) {
+        let value_groups: Vec<String> = chunk
+            .iter()
+            .map(|row| {
+                let placeholders: Vec<String> = row
+                    .iter()
+                    .map(|v| match v {
+                        serde_json::Value::Null => "NULL".to_string(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        serde_json::Value::String(s) => {
+                            format!("'{}'", s.replace('\'', "''"))
+                        }
+                        _ => format!("'{}'", v),
+                    })
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+
+        let insert_sql = format!(
+            "INSERT INTO \"{}\" ({}) VALUES {}",
+            table_name,
+            col_list,
+            value_groups.join(", ")
+        );
+        adapter.execute_statement(&insert_sql)?;
+    }
+
+    // Link to project
+    db.link_connection_to_project(&project_id, &conn.id)?;
+
+    Ok(DatabaseConnection {
+        connected: true,
+        ..conn
+    })
 }
 
 #[tauri::command]
@@ -560,6 +752,47 @@ pub fn add_message(
 }
 
 #[tauri::command]
+pub fn get_message_token_count(
+    exploration_id: String,
+    db: State<'_, Database>,
+) -> Result<u64, AppError> {
+    db.get_exploration_token_count(&exploration_id)
+}
+
+#[tauri::command]
+pub fn add_message_tokens(
+    exploration_id: String,
+    count: i64,
+    db: State<'_, Database>,
+) -> Result<(), AppError> {
+    db.add_exploration_tokens(&exploration_id, count)
+}
+
+#[tauri::command]
+pub fn get_message_turn_count(
+    exploration_id: String,
+    db: State<'_, Database>,
+) -> Result<u64, AppError> {
+    db.get_exploration_turn_count(&exploration_id)
+}
+
+#[tauri::command]
+pub fn increment_message_turn(
+    exploration_id: String,
+    db: State<'_, Database>,
+) -> Result<(), AppError> {
+    db.increment_exploration_turn(&exploration_id)
+}
+
+#[tauri::command]
+pub fn reset_message_history(
+    exploration_id: String,
+    db: State<'_, Database>,
+) -> Result<(), AppError> {
+    db.reset_exploration_history(&exploration_id)
+}
+
+#[tauri::command]
 pub fn list_saved_queries(db: State<'_, Database>) -> Result<Vec<SavedQuery>, AppError> {
     db.list_saved_queries()
 }
@@ -578,6 +811,40 @@ pub fn save_query(
 #[tauri::command]
 pub fn delete_saved_query(id: String, db: State<'_, Database>) -> Result<(), AppError> {
     db.delete_saved_query(&id)
+}
+
+#[tauri::command]
+pub fn list_saved_charts(db: State<'_, Database>) -> Result<Vec<SavedChart>, AppError> {
+    db.list_saved_charts()
+}
+
+#[tauri::command]
+pub fn save_saved_chart(
+    name: String,
+    description: String,
+    chart_type: String,
+    x_key: String,
+    y_key: String,
+    connection_id: Option<String>,
+    sql: Option<String>,
+    data: serde_json::Value,
+    db: State<'_, Database>,
+) -> Result<SavedChart, AppError> {
+    db.save_saved_chart(
+        &name,
+        &description,
+        &chart_type,
+        &x_key,
+        &y_key,
+        connection_id.as_deref(),
+        sql.as_deref(),
+        &data,
+    )
+}
+
+#[tauri::command]
+pub fn delete_saved_chart(id: String, db: State<'_, Database>) -> Result<(), AppError> {
+    db.delete_saved_chart(&id)
 }
 
 #[tauri::command]

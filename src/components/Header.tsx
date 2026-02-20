@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { SAGE, CREAM, FONTS, SEMANTIC } from "../lib/theme";
+import { SAGE, CREAM, FONTS } from "../lib/theme";
 
 export interface HeaderProps {
   title: string;
@@ -10,6 +10,7 @@ export interface HeaderProps {
 export function Header({ title, subtitle, actions }: HeaderProps) {
   return (
     <div
+      data-tauri-drag-region
       style={{
         display: "flex",
         alignItems: "center",
@@ -49,33 +50,6 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         {actions}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 10px",
-            border: `1px solid ${SAGE[100]}`,
-          }}
-        >
-          <div
-            style={{
-              width: 6,
-              height: 6,
-              background: SEMANTIC.success,
-              borderRadius: "50%",
-            }}
-          />
-          <span
-            style={{
-              fontFamily: FONTS.body,
-              fontSize: 11,
-              color: SAGE[500],
-            }}
-          >
-            Ready
-          </span>
-        </div>
       </div>
     </div>
   );
