@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* Arc Brand Tokens                                                    */
+/* ------------------------------------------------------------------ */
+
+@theme inline {
+  /* Sage palette */
+  --color-sage-50: #f0f4f0;
+  --color-sage-100: #dce5dc;
+  --color-sage-200: #b8cab8;
+  --color-sage-300: #8fa88f;
+  --color-sage-400: #6b8a6b;
+  --color-sage-500: #4a6b4a;
+  --color-sage-600: #3d5a3d;
+  --color-sage-700: #2d422d;
+  --color-sage-800: #1e2e1e;
+  --color-sage-900: #111a11;
+  --color-sage-950: #0a100a;
+
+  /* Cream palette */
+  --color-cream-50: #fefdfb;
+  --color-cream-100: #faf7f2;
+  --color-cream-200: #f2ebe0;
+  --color-cream-300: #e8dcc8;
+
+  /* Semantic */
+  --color-success: #4ade80;
+  --color-warning: #d4a853;
+  --color-error: #c45c5c;
+
+  /* Fonts */
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-body: "DM Sans", sans-serif;
+  --font-mono: "DM Mono", monospace;
+}
+
+/* ------------------------------------------------------------------ */
+/* Base resets                                                          */
+/* ------------------------------------------------------------------ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-cream-50);
+  color: var(--color-sage-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scrollbar                                                            */
+/* ------------------------------------------------------------------ */
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-sage-200);
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyframes                                                            */
+/* ------------------------------------------------------------------ */
+
+@keyframes typing-dot {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-3px); }
+}
+
+@keyframes draw-line {
+  from { stroke-dashoffset: 200; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
