@@ -16,6 +16,7 @@ jobs:
       artifact_prefix: Arc
       app_dir: .
       distribute_to: r2,oasis,github
+      auto_publish: false
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
