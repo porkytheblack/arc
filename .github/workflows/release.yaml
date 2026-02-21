@@ -31,3 +31,5 @@ jobs:
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
       OASIS_SERVER_URL: ${{ secrets.OASIS_SERVER_URL }}
       OASIS_CI_KEY: ${{ secrets.OASIS_CI_KEY }}
+      NEXT_PUBLIC_OASIS_API_KEY: ${{ secrets.NEXT_PUBLIC_OASIS_API_KEY }}
+      NEXT_PUBLIC_OASIS_SERVER_URL: ${{ secrets.NEXT_PUBLIC_OASIS_SERVER_URL }}
